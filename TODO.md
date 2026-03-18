@@ -25,6 +25,31 @@
 | 7 | Geen CONTRIBUTING.md |
 | 8 | Geen .gitignore voor generated/temp files |
 
+## P2 — Nice-to-haves
+
+- API docs (OpenAPI/Swagger)
+- Plugin/extensibility system voor custom agent programs
+- Persistent storage beyond JSONL (SQLite etc.)
+- Health check endpoint verbeteren (meer diagnostics)
+- Configurable agent timeout/retry
+- Structured logging (niet console.log)
+
+## Architecture & Code Quality
+
+**Positief:**
+- Clean separation: types/ lib/ services/ cli/ scripts/ — goed gelaagd
+- AgentRuntime abstractie is solide
+- sanitizeName input sanitization aanwezig
+- TypeScript types goed gedefinieerd
+- Tmux-based agent orchestration is onderscheidend vs concurrenten
+
+**Feature Gaps vs Competitors (CrewAI/AutoGen/LangGraph/Swarm):**
+- Geen built-in tool/function calling framework
+- Geen memory/context sharing tussen agents
+- Geen workflow graphs of DAG support
+- Geen observability/tracing
+- Geen agent-to-agent protocol standaard (alleen tmux messaging)
+
 ## Decided
 
 - **Repo naam:** `ensemble`
