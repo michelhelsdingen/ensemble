@@ -103,6 +103,16 @@ ensemble/
 | `ORCHESTRA_PORT` | `23000` | Server port |
 | `ENSEMBLE_URL` | `http://localhost:23000` | CLI target URL |
 | `ENSEMBLE_DATA_DIR` | `~/.aimaestro` | Data directory for teams & messages |
+| `ENSEMBLE_HOST_ID` | `local` | Host identifier for agent spawning |
+| `ENSEMBLE_CORS_ORIGIN` | localhost only | Comma-separated allowed CORS origins |
+| `ENSEMBLE_PROJECT` | auto-detect | Project name for claude-mem summaries |
+
+### Claude Code Permission
+
+Add to `~/.claude/settings.json` → `permissions.allow`:
+```json
+"Bash(~/Documents/ensemble/scripts/collab-launch.sh:*)"
+```
 
 ## How It Works
 
