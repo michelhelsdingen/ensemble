@@ -69,7 +69,7 @@ async function cmdStatus() {
     console.log()
   } catch {
     console.log(`\n  ${c.red}●${c.r} Cannot connect to ${API_BASE}`)
-    console.log(`  ${c.dim}Run: cd ~/Documents/ensemble && npm run dev${c.r}\n`)
+    console.log(`  ${c.dim}Run: npm run dev (from the ensemble directory)${c.r}\n`)
   }
 }
 

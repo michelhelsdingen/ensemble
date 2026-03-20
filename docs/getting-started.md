@@ -10,6 +10,7 @@ title: Getting Started
 |---|---|
 | **Node.js 18+** | Runtime for the ensemble server |
 | **tmux** | Agent sessions run in tmux panes |
+| **Python 3.6+** | Used by collab scripts for message parsing |
 | **At least one AI agent CLI** | e.g. `claude`, `codex`, `aider`, `gemini` |
 
 ### Install tmux

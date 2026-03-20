@@ -196,9 +196,9 @@ To use ensemble from Claude Code, add to `~/.claude/settings.json`:
 {
   "permissions": {
     "allow": [
-      "Bash(~/Documents/ensemble/scripts/collab-launch.sh:*)",
-      "Bash(~/Documents/ensemble/scripts/collab-poll.sh:*)",
-      "Bash(~/Documents/ensemble/scripts/collab-status.sh:*)"
+      "Bash(/path/to/ensemble/scripts/collab-launch.sh:*)",
+      "Bash(/path/to/ensemble/scripts/collab-poll.sh:*)",
+      "Bash(/path/to/ensemble/scripts/collab-status.sh:*)"
     ]
   }
 }

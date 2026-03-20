@@ -21,12 +21,13 @@ Ensemble orchestrates multiple AI agents (Claude Code, Codex, etc.) into collabo
 
 - Node.js 18+
 - [tmux](https://github.com/tmux/tmux) installed
+- Python 3.6+ (used by collab scripts)
 - At least one AI agent CLI available (e.g., `claude`, `codex`)
 
 ### Install & Run
 
 ```bash
-git clone https://github.com/yourusername/ensemble.git
+git clone https://github.com/michelhelsdingen/ensemble.git
 cd ensemble
 npm install
 npm run dev
@@ -111,7 +112,7 @@ ensemble/
 
 Add to `~/.claude/settings.json` → `permissions.allow`:
 ```json
-"Bash(~/Documents/ensemble/scripts/collab-launch.sh:*)"
+"Bash(/path/to/ensemble/scripts/collab-launch.sh:*)"
 ```
 
 ## How It Works

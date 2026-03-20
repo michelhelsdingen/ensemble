@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=./collab-paths.sh
 source "$SCRIPT_DIR/collab-paths.sh"
 
@@ -27,7 +28,7 @@ if curl -sf "$API/api/v1/health" > /dev/null 2>&1; then
   echo -e "  ${CHECK} Server running"
 else
   echo -ne "  ${SPIN} Starting server..."
-  cd ~/Documents/ensemble && ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &
+  cd "$REPO_DIR" && ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &
   for _ in $(seq 1 8); do sleep 1; curl -sf "$API/api/v1/health" > /dev/null 2>&1 && break; done
   if curl -sf "$API/api/v1/health" > /dev/null 2>&1; then
     echo -e "\r  ${CHECK} Server started       "
@@ -74,11 +75,11 @@ printf '%s\n' "$TEAM_ID" > /tmp/collab-team-id.txt
 echo -e "  ${CHECK} Team created ${D}(${TEAM_NAME})${R}"
 
 # ─── 3. Bridge (writes its own PID file via single-instance guard) ───
-nohup ~/Documents/ensemble/scripts/ensemble-bridge.sh "$TEAM_ID" "$API" >> "$BRIDGE_LOG_FILE" 2>&1 &
+nohup "$SCRIPT_DIR/ensemble-bridge.sh" "$TEAM_ID" "$API" >> "$BRIDGE_LOG_FILE" 2>&1 &
 echo -e "  ${CHECK} Bridge started"
 
 # ─── 4. Monitor ───
-MONITOR_CMD="cd ~/Documents/ensemble && ./node_modules/.bin/tsx cli/monitor.ts $TEAM_ID"
+MONITOR_CMD="cd '$REPO_DIR' && ./node_modules/.bin/tsx cli/monitor.ts $TEAM_ID"
 if [ -n "${TMUX:-}" ]; then
   tmux split-window -h -l '40%' "$MONITOR_CMD"
   echo -e "  ${CHECK} Monitor opened ${D}(right panel)${R}"
@@ -86,7 +87,7 @@ if [ -n "${TMUX:-}" ]; then
 else
   MONITOR_SESSION="ensemble-$TEAM_ID"
   tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-  tmux new-session -d -s "$MONITOR_SESSION" -c ~/Documents/ensemble \
+  tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
     "./node_modules/.bin/tsx cli/monitor.ts $TEAM_ID"
   echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
   MONITOR_MODE="session"

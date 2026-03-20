@@ -258,8 +258,9 @@ export function buildPromptPreview(params: {
   templateName?: string
 }): string {
   const template = loadCollabTemplate(params.templateName)
-  const teamSayCmd = `/usr/local/bin/team-say ${params.teamId} ${params.agentName} ${params.teammateNames[0] || 'team'}`
-  const teamReadCmd = `/usr/local/bin/team-read ${params.teamId}`
+  const scriptsDir = path.join(__dirname, '..', 'scripts')
+  const teamSayCmd = `${scriptsDir}/team-say.sh ${params.teamId} ${params.agentName} ${params.teammateNames[0] || 'team'}`
+  const teamReadCmd = `${scriptsDir}/team-read.sh ${params.teamId}`
 
   let roleInstructions: string[]
 

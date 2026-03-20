@@ -916,7 +916,7 @@ async function pickTeam(): Promise<string> {
     })
   } catch (err) {
     console.error(`\n${color.red}  Cannot connect to ensemble server at ${API_BASE}${color.reset}`)
-    console.error(`${color.gray}  Start it with: cd ~/Documents/ensemble && npm run dev${color.reset}\n`)
+    console.error(`${color.gray}  Start it with: npm run dev (from the ensemble directory)${color.reset}\n`)
     process.exit(1)
   }
 }
