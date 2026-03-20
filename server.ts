@@ -26,6 +26,16 @@ type RateLimitEntry = {
 
 const rateLimitByIp = new Map<string, RateLimitEntry>()
 
+// Periodic cleanup of stale rate limit entries to prevent unbounded Map growth
+setInterval(() => {
+  const now = Date.now()
+  for (const [ip, entry] of rateLimitByIp) {
+    if (now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      rateLimitByIp.delete(ip)
+    }
+  }
+}, 60_000)
+
 function getAllowedCorsOrigins(): string[] {
   const configured = process.env.ENSEMBLE_CORS_ORIGIN?.trim()
   if (!configured) return []
@@ -128,8 +138,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, result.data, result.status, origin)
       }
       if (method === 'POST') {
-        const body = JSON.parse(await readBody(req))
-        const result = await createOrchestraTeam(body)
+        let body: unknown
+        try {
+          body = JSON.parse(await readBody(req))
+        } catch {
+          return json(res, { error: 'Bad Request: malformed JSON' }, 400, origin)
+        }
+        const result = await createOrchestraTeam(body as Parameters<typeof createOrchestraTeam>[0])
         if (result.error) return json(res, { error: result.error }, result.status, origin)
         return json(res, result.data, result.status, origin)
       }
@@ -145,8 +160,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, result.data, result.status, origin)
       }
       if (method === 'POST') {
-        const body = JSON.parse(await readBody(req))
-        const result = await sendTeamMessage(teamId, body.to || 'team', body.content, body.from, body.id, body.timestamp)
+        let body: Record<string, unknown>
+        try {
+          body = JSON.parse(await readBody(req))
+        } catch {
+          return json(res, { error: 'Bad Request: malformed JSON' }, 400, origin)
+        }
+        const result = await sendTeamMessage(teamId, (body.to as string) || 'team', body.content as string, body.from as string, body.id as string, body.timestamp as string)
         if (result.error) return json(res, { error: result.error }, result.status, origin)
         return json(res, result.data, result.status, origin)
       }
