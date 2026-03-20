@@ -67,7 +67,7 @@ while true; do
   if [ "$TOTAL" -gt "$POSTED" ]; then
     # Process new lines — only advance posted counter on success.
     NEW_POSTED=$(python3 -c "
-import json, math, re, sys, time, urllib.error, urllib.request
+import json, sys, time, urllib.error, urllib.request
 from itertools import islice
 
 team_id = '$TEAM_ID'
@@ -82,15 +82,16 @@ with open('$FILE') as f:
             last_success = i + 1
             continue
         try:
-            cleaned = re.sub(r'\\\\\\\\([^\"\\\\\\\\nrtbfu/])', r'\\1', line)
-            msg = json.loads(cleaned)
+            msg = json.loads(line)
         except json.JSONDecodeError:
-            try:
-                msg = json.loads(line)
-            except:
-                print(f'[bridge] skip malformed line {i}', file=sys.stderr, flush=True)
-                last_success = i + 1
-                continue
+            print(f'[bridge] skip malformed JSON line {i}: {line[:80]}', file=sys.stderr, flush=True)
+            last_success = i + 1
+            continue
+
+        if not isinstance(msg, dict):
+            print(f'[bridge] skip non-object line {i}', file=sys.stderr, flush=True)
+            last_success = i + 1
+            continue
 
         content = msg.get('content','')
         if not content:
@@ -118,18 +119,24 @@ with open('$FILE') as f:
                     pass
                 success = True
                 break
-            except Exception as e:
+            except urllib.error.HTTPError as e:
+                if 400 <= e.code < 500:
+                    print(f'[bridge] client error {e.code} on line {i}, skipping: {e}', file=sys.stderr, flush=True)
+                    success = True  # skip permanently, don't retry client errors
+                    break
                 delay = min(30.0, 0.5 * (2 ** attempt))
-                print(
-                    f'[bridge] api error line {i}, retry {attempt + 1}/10 in {delay:.1f}s: {e}',
-                    file=sys.stderr,
-                    flush=True,
-                )
+                print(f'[bridge] server error line {i}, retry {attempt+1}/10 in {delay:.1f}s: {e}', file=sys.stderr, flush=True)
+                if attempt == 9:
+                    break
+                time.sleep(delay)
+            except (urllib.error.URLError, OSError) as e:
+                delay = min(30.0, 0.5 * (2 ** attempt))
+                print(f'[bridge] network error line {i}, retry {attempt+1}/10 in {delay:.1f}s: {e}', file=sys.stderr, flush=True)
                 if attempt == 9:
                     break
                 time.sleep(delay)
         if not success:
-            print(f'[bridge] giving up on line {i} for now', file=sys.stderr, flush=True)
+            print(f'[bridge] giving up on line {i} after 10 retries', file=sys.stderr, flush=True)
             break
 
         fr = msg.get('from','?')

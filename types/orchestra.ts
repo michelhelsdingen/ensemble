@@ -2,7 +2,7 @@ export interface OrchestraTeam {
   id: string
   name: string
   description: string
-  status: 'forming' | 'active' | 'paused' | 'completed' | 'disbanded'
+  status: 'forming' | 'active' | 'paused' | 'completed' | 'disbanded' | 'failed'
   agents: OrchestraTeamAgent[]
   createdBy: string
   createdAt: string
@@ -17,7 +17,7 @@ export interface OrchestraTeamAgent {
   program: string
   role: string
   hostId: string
-  status: 'spawning' | 'active' | 'idle' | 'done'
+  status: 'spawning' | 'active' | 'idle' | 'done' | 'failed'
   worktreePath?: string
   worktreeBranch?: string
 }

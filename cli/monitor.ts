@@ -164,6 +164,8 @@ class Monitor {
   private team: Team | null = null
   private messages: Message[] = []
   private lastMessageCount = 0
+  private readonly MAX_MESSAGES = 1000
+  private lastSeenTimestamp: string | null = null
   private scrollOffset = 0
   private inputMode = false
   private inputBuffer = ''
@@ -249,8 +251,27 @@ class Monitor {
   }
 
   private async fetchMessages() {
-    const data = await apiGet<{ messages: Message[] }>(`/api/orchestra/teams/${this.teamId}/feed`)
-    this.messages = data.messages || []
+    const sinceParam = this.lastSeenTimestamp ? `?since=${encodeURIComponent(this.lastSeenTimestamp)}` : ''
+    const data = await apiGet<{ messages: Message[] }>(`/api/orchestra/teams/${this.teamId}/feed${sinceParam}`)
+    const newMessages = data.messages || []
+
+    if (this.lastSeenTimestamp && newMessages.length > 0) {
+      // Incremental: append only new messages
+      this.messages.push(...newMessages)
+    } else if (!this.lastSeenTimestamp) {
+      // Initial fetch: take all
+      this.messages = newMessages
+    }
+
+    // Update cursor to latest timestamp
+    if (this.messages.length > 0) {
+      this.lastSeenTimestamp = this.messages[this.messages.length - 1].timestamp
+    }
+
+    // Cap buffer to prevent unbounded growth
+    if (this.messages.length > this.MAX_MESSAGES) {
+      this.messages = this.messages.slice(-this.MAX_MESSAGES)
+    }
   }
 
   private handleInput(key: string) {
