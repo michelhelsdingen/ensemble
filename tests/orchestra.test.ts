@@ -266,31 +266,43 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     return { mod, appendedMessages }
   }
 
-  it('auto-disbands when idle >60s and all agents sent completion signal', async () => {
+  it('auto-disbands when two different agents send completion signals within 60s', async () => {
     const team = makeTeam()
     const messages: OrchestraMessage[] = [
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:03:40.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Alles afgerond', timestamp: '2026-03-18T12:03:50.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:04:20.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Alles afgerond', timestamp: '2026-03-18T12:04:50.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
     await mod.checkIdleTeams()
 
-    // Should have triggered auto-disband (appended a message about it)
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 
-  it('does NOT auto-disband when messages are recent (< 60s)', async () => {
+  it('does NOT auto-disband when only one completion signal exists and idle is <= 120s', async () => {
     const team = makeTeam()
     const messages: OrchestraMessage[] = [
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:04:30.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Klaar', timestamp: '2026-03-18T12:04:50.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:03:40.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working', timestamp: '2026-03-18T12:03:50.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
     await mod.checkIdleTeams()
 
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
+  })
+
+  it('auto-disbands when one completion signal exists and team is idle for more than 120s', async () => {
+    const team = makeTeam()
+    const messages: OrchestraMessage[] = [
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:02:30.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still investigating', timestamp: '2026-03-18T12:02:40.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 
   it('does NOT auto-disband when agents have no completion signal', async () => {
@@ -340,11 +352,12 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
   })
 
-  it('does NOT auto-disband when only some agents sent completion signals', async () => {
+  it('does NOT auto-disband when signals come from the same agent only', async () => {
     const team = makeTeam()
     const messages: OrchestraMessage[] = [
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:03:40.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working...', timestamp: '2026-03-18T12:03:50.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:04:00.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Alles afgerond', timestamp: '2026-03-18T12:04:30.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working...', timestamp: '2026-03-18T12:04:45.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
@@ -353,19 +366,17 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
   })
 
-  it('ignores orchestra messages when determining last message', async () => {
+  it('ignores orchestra messages when determining idle time', async () => {
     const team = makeTeam()
     const messages: OrchestraMessage[] = [
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Done', timestamp: '2026-03-18T12:03:40.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Complete', timestamp: '2026-03-18T12:03:45.000Z' }),
-      // Orchestra message is the latest but should be ignored for idle check
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Done', timestamp: '2026-03-18T12:02:30.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working', timestamp: '2026-03-18T12:02:35.000Z' }),
       makeMessage({ from: 'orchestra', teamId: 'team-1', content: 'Agent joined', timestamp: '2026-03-18T12:04:55.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
     await mod.checkIdleTeams()
 
-    // Last non-orchestra message is at 12:03:45, which is >60s ago → should disband
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 })
@@ -375,11 +386,11 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
 // ─────────────────────────────────────────────────────
 describe('completion signal patterns', () => {
   const COMPLETION_PATTERNS = [
-    /\bafgerond\b/i,
-    /\bdone\b/i,
-    /\bcomplete(?:d)?\b/i,
-    /\bklaar\b/i,
-    /\btot de volgende\b/i,
+    /(?:^|[^\p{L}\p{N}_])afgerond(?:[^\p{L}\p{N}_]|$)/iu,
+    /(?:^|[^\p{L}\p{N}_])done(?:[^\p{L}\p{N}_]|$)/iu,
+    /(?:^|[^\p{L}\p{N}_])complete(?:d)?(?:[^\p{L}\p{N}_]|$)/iu,
+    /(?:^|[^\p{L}\p{N}_])klaar(?:[^\p{L}\p{N}_]|$)/iu,
+    /(?:^|\s)tot de volgende(?:\s|$)/i,
   ]
 
   function hasCompletionSignal(content: string): boolean {
@@ -398,6 +409,8 @@ describe('completion signal patterns', () => {
     ['Still working on the task', false],
     ['Analyzing the codebase now', false],
     ['abandoned', false],
+    ['completion marker only', false],
+    ['undone but still working', false],
     ['', false],
   ])('"%s" → %s', (content: string, expected: boolean) => {
     expect(hasCompletionSignal(content)).toBe(expected)
@@ -720,7 +733,7 @@ describe('worktree isolation lifecycle', () => {
     }))
   })
 
-  it('merges and destroys local worktrees before killing the local session', async () => {
+  it('kills the local session before merging and destroying its worktree', async () => {
     const team = makeTeam({
       id: 'team-worktree-disband',
       name: 'team-worktree-disband',
@@ -751,8 +764,8 @@ describe('worktree isolation lifecycle', () => {
       branch: 'collab/team-worktree-disband/codex-1',
       agentName: 'codex-1',
     }, '/repo')
-    expect(mocks.mergeWorktree.mock.invocationCallOrder[0]).toBeLessThan(mocks.killLocalAgent.mock.invocationCallOrder[0])
-    expect(mocks.destroyWorktree.mock.invocationCallOrder[0]).toBeLessThan(mocks.killLocalAgent.mock.invocationCallOrder[0])
+    expect(mocks.killLocalAgent.mock.invocationCallOrder[0]).toBeLessThan(mocks.mergeWorktree.mock.invocationCallOrder[0])
+    expect(mocks.mergeWorktree.mock.invocationCallOrder[0]).toBeLessThan(mocks.destroyWorktree.mock.invocationCallOrder[0])
   })
 
   it('skips worktree merge for remote agents even if worktree metadata exists', async () => {

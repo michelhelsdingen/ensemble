@@ -40,15 +40,21 @@ interface ServiceResult<T> {
   status: number
 }
 
-const IDLE_DISBAND_THRESHOLD_MS = 60_000
 const IDLE_CHECK_INTERVAL_MS = 15_000
+const COMPLETION_SIGNAL_WINDOW_MS = 60_000
+const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 120_000
 const COMPLETION_PATTERNS = [
-  /\bafgerond\b/i,
-  /\bdone\b/i,
-  /\bcomplete(?:d)?\b/i,
-  /\bklaar\b/i,
-  /\btot de volgende\b/i,
+  /(?:^|[^\p{L}\p{N}_])afgerond(?:[^\p{L}\p{N}_]|$)/iu,
+  /(?:^|[^\p{L}\p{N}_])done(?:[^\p{L}\p{N}_]|$)/iu,
+  /(?:^|[^\p{L}\p{N}_])complete(?:d)?(?:[^\p{L}\p{N}_]|$)/iu,
+  /(?:^|[^\p{L}\p{N}_])klaar(?:[^\p{L}\p{N}_]|$)/iu,
+  /(?:^|\s)tot de volgende(?:\s|$)/i,
 ]
+
+interface CompletionSignal {
+  agentName: string
+  timestamp: number
+}
 // Telegram notifications: set both env vars to enable, omit to disable
 const TELEGRAM_BOT_TOKEN = process.env.ENSEMBLE_TELEGRAM_BOT_TOKEN || ''
 const TELEGRAM_CHAT_ID = process.env.ENSEMBLE_TELEGRAM_CHAT_ID || ''
@@ -122,20 +128,37 @@ class OrchestraService {
       : NaN
     if (Number.isNaN(lastTimestamp)) return false
 
-    const idleForMs = Date.now() - lastTimestamp
-    if (idleForMs <= IDLE_DISBAND_THRESHOLD_MS) return false
-
     const activeAgents = team.agents.filter(agent => agent.status === 'active')
     if (activeAgents.length === 0) return false
 
-    return activeAgents.every(agent => {
-      const lastAgentMessage = [...messages].reverse().find(message => message.from === agent.name)
-      return Boolean(lastAgentMessage && this.hasCompletionSignal(lastAgentMessage.content))
-    })
+    const idleForMs = Date.now() - lastTimestamp
+    const activeAgentNames = new Set(activeAgents.map(agent => agent.name))
+    const completionSignals = messages
+      .filter(message => activeAgentNames.has(message.from) && this.hasCompletionSignal(message.content))
+      .map(message => ({
+        agentName: message.from,
+        timestamp: message.timestamp ? new Date(message.timestamp).getTime() : NaN,
+      }))
+      .filter((signal): signal is CompletionSignal => !Number.isNaN(signal.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp)
+
+    if (this.hasTwoRecentCompletionSignals(completionSignals)) return true
+    if (idleForMs <= SINGLE_SIGNAL_IDLE_THRESHOLD_MS) return false
+    return completionSignals.length >= 1
   }
 
   private hasCompletionSignal(content: string): boolean {
     return COMPLETION_PATTERNS.some(pattern => pattern.test(content))
+  }
+
+  private hasTwoRecentCompletionSignals(signals: CompletionSignal[]): boolean {
+    for (let i = 0; i < signals.length; i++) {
+      for (let j = i + 1; j < signals.length; j++) {
+        if (signals[j].timestamp - signals[i].timestamp > COMPLETION_SIGNAL_WINDOW_MS) break
+        if (signals[i].agentName !== signals[j].agentName) return true
+      }
+    }
+    return false
   }
 
   private stop(): void {
@@ -680,47 +703,6 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
       })
   )
 
-  // Merge worktrees BEFORE killing sessions (agents may still be writing)
-  // Only local agents have worktrees; derive basePath from worktree parent dir
-  const agentsWithWorktrees = team.agents.filter(
-    a => a.worktreePath && a.worktreeBranch && (!a.hostId || isSelf(a.hostId))
-  )
-  if (agentsWithWorktrees.length > 0) {
-    // Derive the base repo path from the worktree path (parent of .worktrees/)
-    const firstWorktree = agentsWithWorktrees[0].worktreePath!
-    const worktreesDir = path.dirname(firstWorktree)
-    const basePath = path.dirname(worktreesDir) // goes up from .worktrees/
-    const mergeResults: Array<{ agent: string; success: boolean; conflicts?: string[] }> = []
-
-    for (const agent of agentsWithWorktrees) {
-      const worktreeInfo: WorktreeInfo = {
-        path: agent.worktreePath!,
-        branch: agent.worktreeBranch!,
-        agentName: agent.name,
-      }
-      const result = await mergeWorktree(worktreeInfo, basePath)
-      mergeResults.push({ agent: agent.name, ...result })
-
-      appendMessage(teamId, {
-        id: uuidv4(), teamId, from: 'orchestra', to: 'team',
-        content: result.success
-          ? `🌳 Merged ${agent.name}'s worktree (${agent.worktreeBranch})`
-          : `⚠️ Merge conflict for ${agent.name}: ${result.conflicts?.join(', ')}`,
-        type: 'chat', timestamp: new Date().toISOString(),
-      })
-    }
-
-    // Cleanup worktrees after merge
-    for (const agent of agentsWithWorktrees) {
-      const worktreeInfo: WorktreeInfo = {
-        path: agent.worktreePath!,
-        branch: agent.worktreeBranch!,
-        agentName: agent.name,
-      }
-      await destroyWorktree(worktreeInfo, basePath)
-    }
-  }
-
   for (const agent of team.agents) {
     if (agent.status === 'active') {
       appendMessage(teamId, {
@@ -737,6 +719,43 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
           await killLocalAgent(`${team.name}-${agent.name}`)
         }
       } catch { /* session may already be gone */ }
+    }
+  }
+
+  const agentsWithWorktrees = team.agents.filter(
+    a => a.worktreePath && a.worktreeBranch && (!a.hostId || isSelf(a.hostId))
+  )
+  if (agentsWithWorktrees.length > 0) {
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    const firstWorktree = agentsWithWorktrees[0].worktreePath!
+    const worktreesDir = path.dirname(firstWorktree)
+    const basePath = path.dirname(worktreesDir)
+
+    for (const agent of agentsWithWorktrees) {
+      const worktreeInfo: WorktreeInfo = {
+        path: agent.worktreePath!,
+        branch: agent.worktreeBranch!,
+        agentName: agent.name,
+      }
+      const result = await mergeWorktree(worktreeInfo, basePath)
+
+      appendMessage(teamId, {
+        id: uuidv4(), teamId, from: 'orchestra', to: 'team',
+        content: result.success
+          ? `🌳 Merged ${agent.name}'s worktree (${agent.worktreeBranch})`
+          : `⚠️ Merge conflict for ${agent.name}: ${result.conflicts?.join(', ')}`,
+        type: 'chat', timestamp: new Date().toISOString(),
+      })
+    }
+
+    for (const agent of agentsWithWorktrees) {
+      const worktreeInfo: WorktreeInfo = {
+        path: agent.worktreePath!,
+        branch: agent.worktreeBranch!,
+        agentName: agent.name,
+      }
+      await destroyWorktree(worktreeInfo, basePath)
     }
   }
 
