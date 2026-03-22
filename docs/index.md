@@ -1,8 +1,7 @@
 ---
 title: Home
+nav_order: 1
 ---
-
-[Home](index) | [Getting Started](getting-started) | [Configuration](configuration) | [API](api) | [CLI](cli) | [Scripts](collab-scripts) | [Architecture](architecture)
 
 # Ensemble
 

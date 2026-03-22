@@ -1,8 +1,7 @@
 ---
 title: Getting Started
+nav_order: 2
 ---
-
-[Home](index) | [Getting Started](getting-started) | [Configuration](configuration) | [API](api) | [CLI](cli) | [Scripts](collab-scripts) | [Architecture](architecture)
 
 # Getting Started
 

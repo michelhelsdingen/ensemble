@@ -1,8 +1,7 @@
 ---
 title: Configuration
+nav_order: 3
 ---
-
-[Home](index) | [Getting Started](getting-started) | [Configuration](configuration) | [API](api) | [CLI](cli) | [Scripts](collab-scripts) | [Architecture](architecture)
 
 # Configuration
 

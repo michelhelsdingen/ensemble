@@ -1,8 +1,7 @@
 ---
 title: Architecture
+nav_order: 7
 ---
-
-[Home](index) | [Getting Started](getting-started) | [Configuration](configuration) | [API](api) | [CLI](cli) | [Scripts](collab-scripts) | [Architecture](architecture)
 
 # Architecture
 
