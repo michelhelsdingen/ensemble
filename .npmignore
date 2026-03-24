@@ -1,0 +1,25 @@
+# Development
+.github/
+.claude/
+.env*
+docs/
+demo/
+tests/
+skill/
+dist/
+node_modules/
+
+# Media
+*.gif
+*.mp4
+
+# Config
+.gitignore
+.eslintrc*
+tsconfig.json
+vitest.config.*
+
+# Other
+*.md
+!README.md
+!LICENSE

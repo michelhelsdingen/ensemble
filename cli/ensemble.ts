@@ -18,6 +18,18 @@ import path from 'path'
 
 const API_BASE = process.env.ENSEMBLE_URL || 'http://localhost:23000'
 
+// Resolve package root (works both in dev and when installed via npm)
+const __cli_filename = fileURLToPath(import.meta.url)
+const ENSEMBLE_ROOT = process.env.ENSEMBLE_ROOT || path.resolve(path.dirname(__cli_filename), '..')
+
+function findTsx(): string {
+  // Check local node_modules first (npm installed package)
+  const local = path.join(ENSEMBLE_ROOT, 'node_modules', '.bin', 'tsx')
+  if (fs.existsSync(local)) return local
+  // Fall back to global tsx
+  return 'tsx'
+}
+
 // ANSI
 const c = {
   r: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -71,7 +83,7 @@ async function cmdStatus() {
     console.log()
   } catch {
     console.log(`\n  ${c.red}●${c.r} Cannot connect to ${API_BASE}`)
-    console.log(`  ${c.dim}Run: npm run dev (from the ensemble directory)${c.r}\n`)
+    console.log(`  ${c.dim}Run: ensemble start${c.r}\n`)
   }
 }
 
@@ -139,8 +151,6 @@ async function cmdSteer(teamId: string, message: string) {
 }
 
 async function cmdRun(task: string, agentFlags: string | undefined, timeoutSec: number) {
-  const __filename = fileURLToPath(import.meta.url)
-  const repoDir = path.resolve(path.dirname(__filename), '..')
   const cwd = process.cwd()
 
   // 1. Ensure server is running
@@ -149,8 +159,8 @@ async function cmdRun(task: string, agentFlags: string | undefined, timeoutSec: 
     await apiGet('/api/v1/health')
   } catch {
     process.stderr.write(`  ${c.dim}Starting server...${c.r}\n`)
-    serverProc = spawn('tsx', ['server.ts'], {
-      cwd: repoDir, stdio: 'ignore', detached: true,
+    serverProc = spawn(findTsx(), [path.join(ENSEMBLE_ROOT, 'server.ts')], {
+      cwd: ENSEMBLE_ROOT, stdio: 'ignore', detached: true,
     })
     serverProc.unref()
     for (let i = 0; i < 10; i++) {
@@ -244,11 +254,10 @@ switch (cmd) {
   case 'monitor':
   case 'watch':
   case 'mon': {
-    const __filename = fileURLToPath(import.meta.url)
-    const monitorPath = path.join(path.dirname(__filename), 'monitor.ts')
+    const monitorPath = path.join(ENSEMBLE_ROOT, 'cli', 'monitor.ts')
     const monitorArgs = args.length ? args : ['--latest']
     try {
-      execFileSync('tsx', [monitorPath, ...monitorArgs], { stdio: 'inherit' })
+      execFileSync(findTsx(), [monitorPath, ...monitorArgs], { stdio: 'inherit', cwd: ENSEMBLE_ROOT })
     } catch { /* exit handled by monitor */ }
     break
   }
@@ -288,6 +297,22 @@ switch (cmd) {
     }
     await cmdSteer(args[0], args.slice(1).join(' '))
     break
+  case 'start':
+  case 'server': {
+    try {
+      await apiGet('/api/v1/health')
+      console.log(`  ${c.bGreen}●${c.r} Server already running at ${c.dim}${API_BASE}${c.r}`)
+    } catch {
+      console.log(`  ${c.dim}Starting ensemble server...${c.r}`)
+      const srv = spawn(findTsx(), [path.join(ENSEMBLE_ROOT, 'server.ts')], {
+        cwd: ENSEMBLE_ROOT, stdio: 'inherit',
+      })
+      srv.on('exit', code => process.exit(code || 0))
+      // Keep alive
+      await new Promise(() => {})
+    }
+    break
+  }
   case 'help':
   case '--help':
   case '-h':
@@ -296,7 +321,8 @@ switch (cmd) {
   ${c.bold}${c.bWhite}◈ ensemble${c.r} — multi-agent collaboration engine
 
   ${c.bold}Commands:${c.r}
-    ${c.bWhite}run${c.r} "task" [--agents ..]   Run headless (no Claude Code needed)
+    ${c.bWhite}start${c.r}                      Start the ensemble server
+    ${c.bWhite}run${c.r} "task" [--agents ..]   Run headless (auto-starts server)
     ${c.bWhite}monitor${c.r} [--latest | id]   Watch team collaboration live
     ${c.bWhite}teams${c.r}                      List all teams
     ${c.bWhite}steer${c.r} <id> <message>       Send steering message to team

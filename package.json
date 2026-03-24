@@ -1,10 +1,10 @@
 {
-  "name": "ensemble",
+  "name": "@ensemble-ai/cli",
   "version": "1.0.0",
-  "description": "Standalone multi-agent collaboration engine — Codex + Claude working together",
+  "description": "Multi-agent collaboration engine — AI agents that work as one",
   "type": "module",
   "bin": {
-    "ensemble": "./cli/ensemble.ts"
+    "ensemble": "bin/ensemble.cjs"
   },
   "scripts": {
     "dev": "tsx server.ts",
@@ -13,7 +13,40 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",
     "monitor": "tsx cli/monitor.ts --latest",
-    "cli": "tsx cli/ensemble.ts"
+    "cli": "tsx cli/ensemble.ts",
+    "postinstall": "node ./bin/postinstall.cjs"
+  },
+  "files": [
+    "bin/",
+    "cli/",
+    "lib/",
+    "services/",
+    "types/",
+    "scripts/",
+    "server.ts",
+    "agents.json",
+    "collab-templates.json",
+    "tsconfig.json",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ai", "agents", "multi-agent", "collaboration",
+    "claude", "codex", "gemini", "tmux", "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michelhelsdingen/ensemble.git"
+  },
+  "homepage": "https://michelhelsdingen.github.io/ensemble/",
+  "bugs": {
+    "url": "https://github.com/michelhelsdingen/ensemble/issues"
+  },
+  "author": "Michel Helsdingen <michel@helsdingen.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "tsx": "^4.0.0",
