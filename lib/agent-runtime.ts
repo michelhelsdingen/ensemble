@@ -8,10 +8,11 @@
  * Phase 4 of the service-layer refactoring.
  */
 
-import { exec, execFileSync as nodeExecFileSync } from 'child_process'
+import { exec, execFile, execFileSync as nodeExecFileSync } from 'child_process'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -172,8 +173,7 @@ export class TmuxRuntime implements AgentRuntime {
 
   async createSession(name: string, cwd: string): Promise<void> {
     const sName = this.sanitizeName(name)
-    const sCwd = cwd.replace(/[^a-zA-Z0-9\-_./~ ]/g, '')
-    await execAsync(`tmux new-session -d -s "${sName}" -c "${sCwd}"`)
+    await execFileAsync('tmux', ['new-session', '-d', '-s', sName, '-c', cwd])
   }
 
   async killSession(name: string): Promise<void> {

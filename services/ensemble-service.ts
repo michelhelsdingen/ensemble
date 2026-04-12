@@ -50,6 +50,18 @@ const COMPLETION_PATTERNS = [
   /(?:^|[^\p{L}\p{N}_])klaar(?:[^\p{L}\p{N}_]|$)/iu,
   /(?:^|\s)tot de volgende(?:\s|$)/i,
 ]
+const AUTO_CONFIRM_GATES = [
+  {
+    name: 'trust prompt',
+    pattern: /Do you trust the contents of this directory\?|Quick safety check:|Yes, I trust this folder/i,
+    action: 'enter' as const,
+  },
+  {
+    name: 'bypass permissions warning',
+    pattern: /WARNING: Claude Code running in Bypass Permissions mode/i,
+    action: 'accept-bypass' as const,
+  },
+]
 
 interface CompletionSignal {
   agentName: string
@@ -255,12 +267,12 @@ export function buildPromptPreview(params: {
   agentName: string
   teammateNames: string[]
   agentIndex: number
+  workingDirectory: string
+  teamSayCmd: string
+  teamReadCmd: string
   templateName?: string
 }): string {
   const template = loadCollabTemplate(params.templateName)
-  const scriptsDir = path.join(__dirname, '..', 'scripts')
-  const teamSayCmd = `${scriptsDir}/team-say.sh ${params.teamId} ${params.agentName} ${params.teammateNames[0] || 'team'}`
-  const teamReadCmd = `${scriptsDir}/team-read.sh ${params.teamId}`
 
   let roleInstructions: string[]
 
@@ -285,16 +297,18 @@ export function buildPromptPreview(params: {
           `You own implementation, writing code, running tests, and reporting concrete execution progress.`,
           `After greeting, wait for the lead's plan before starting implementation work.`,
           `Once the lead shares a plan, execute it pragmatically, report what you changed, and surface blockers or test failures quickly.`,
+          `Stay focused on the task directory first. Review files under the assigned working directory before exploring other repo areas, and only expand scope if the lead explicitly asks or a finding clearly depends on it.`,
         ]
   }
 
   return [
     `You are ${params.agentName} in team "${params.teamName}" with teammate ${params.teammateNames.join(', ')}.`,
     `Task: ${params.description}`,
+    `PRIMARY WORKING DIRECTORY: ${params.workingDirectory}`,
     ...roleInstructions,
     `COMMUNICATION RULES:`,
-    `1. Send findings: ${teamSayCmd} "your message"`,
-    `2. Read teammate messages: ${teamReadCmd}`,
+    `1. Send findings: ${params.teamSayCmd} "your message"`,
+    `2. Read teammate messages: ${params.teamReadCmd}`,
     `3. After EVERY analysis step, run team-say to share what you found`,
     `4. After EVERY team-say, run team-read to check for responses`,
     `5. If teammate shared findings, RESPOND to them`,
@@ -343,7 +357,10 @@ export async function createEnsembleTeam(
     }
   }
 
-  const buildPrompt = (agentName: string, otherNames: string[], agentIndex: number) => {
+  const buildPrompt = (agentName: string, otherNames: string[], agentIndex: number, agentCwd: string) => {
+    const scriptsDir = path.join(__dirname, '..', 'scripts')
+    const teamSayScript = path.relative(agentCwd, path.join(scriptsDir, 'team-say.sh')) || '.'
+    const teamReadScript = path.relative(agentCwd, path.join(scriptsDir, 'team-read.sh')) || '.'
     return buildPromptPreview({
       teamId: team.id,
       teamName: team.name,
@@ -351,6 +368,9 @@ export async function createEnsembleTeam(
       agentName,
       teammateNames: otherNames,
       agentIndex,
+      workingDirectory: agentCwd,
+      teamSayCmd: `${teamSayScript} ${team.id} ${agentName} ${otherNames[0] || 'team'}`,
+      teamReadCmd: `${teamReadScript} ${team.id}`,
       templateName: request.templateName,
     })
   }
@@ -360,7 +380,8 @@ export async function createEnsembleTeam(
     const agentSpec = team.agents[i]
     const hostId = await routeToHost(agentSpec.program, request.agents[i].hostId)
     const agentName = `${team.name}-${agentSpec.name}`
-    const prompt = buildPrompt(agentSpec.name, team.agents.filter((_, j) => j !== i).map(a => a.name), i)
+    const agentCwd = worktreeMap.get(agentSpec.name)?.path || cwd
+    const prompt = buildPrompt(agentSpec.name, team.agents.filter((_, j) => j !== i).map(a => a.name), i, agentCwd)
 
     ensureCollabDirs(team.id)
     const promptFile = collabPromptFile(team.id, agentSpec.name)
@@ -372,7 +393,6 @@ export async function createEnsembleTeam(
       console.log(`[Ensemble] Spawning ${agentName} (${agentSpec.program}) on ${hostId} (self=${isSelf(hostId)})`)
 
       if (isSelf(hostId)) {
-        const agentCwd = worktreeMap.get(agentSpec.name)?.path || cwd
         const spawned = await spawnLocalAgent({
           name: agentName,
           program: agentSpec.program,
@@ -421,6 +441,8 @@ export async function createEnsembleTeam(
       const start = Date.now()
       const agentConfig = resolveAgentProgram(program)
       const readyMarker = agentConfig.readyMarker
+      let lastGateName = ''
+      let lastGateHandledAt = 0
       while (Date.now() - start < maxWait) {
         try {
           if (hostId && !isSelf(hostId)) {
@@ -431,6 +453,22 @@ export async function createEnsembleTeam(
             }
           } else {
             const output = await runtime.capturePane(sessionName, 50)
+            const gate = AUTO_CONFIRM_GATES.find(candidate => candidate.pattern.test(output))
+            if (gate) {
+              const now = Date.now()
+              if (gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
+                if (gate.action === 'accept-bypass') {
+                  await runtime.sendKeys(sessionName, 'Down', { enter: true })
+                } else {
+                  await runtime.sendKeys(sessionName, 'Enter')
+                }
+                lastGateName = gate.name
+                lastGateHandledAt = now
+                console.log(`[Ensemble] Auto-confirmed ${gate.name} in ${sessionName}`)
+              }
+              await new Promise(r => setTimeout(r, 1000))
+              continue
+            }
             if (output.includes(readyMarker)) {
               console.log(`[Ensemble] ${sessionName} is ready (${Math.round((Date.now() - start) / 1000)}s)`)
               return true
@@ -483,7 +521,7 @@ export async function createEnsembleTeam(
       })
 
       const buildStagedPlanPrompt = (agentName: string, otherNames: string[], agentIndex: number): string => [
-        buildPrompt(agentName, otherNames, agentIndex),
+        buildPrompt(agentName, otherNames, agentIndex, worktreeMap.get(agentName)?.path || cwd),
         `STAGED WORKFLOW MODE.`,
         `PHASE 1 PLAN: ONLY create and share a plan via team-say.`,
         `Do NOT write code, edit files, or run mutating commands yet.`,
@@ -524,6 +562,7 @@ export async function createEnsembleTeam(
       await Promise.all(
         ready.map(async ({ agent, sessionName }) => {
           const promptFile = collabPromptFile(team.id, agent.name)
+          const needsClaudeSubmitNudge = agent.program.toLowerCase().includes('claude')
           try {
             if (agent.hostId && !isSelf(agent.hostId)) {
               const host = getHostById(agent.hostId)
@@ -538,6 +577,15 @@ export async function createEnsembleTeam(
               } else {
                 const prompt = fs.readFileSync(promptFile, 'utf-8')
                 await runtime.sendKeys(sessionName, prompt, { literal: true, enter: true })
+              }
+
+              if (needsClaudeSubmitNudge) {
+                for (const delayMs of [1500, 3000, 6000]) {
+                  await new Promise(resolve => setTimeout(resolve, delayMs))
+                  const pane = await runtime.capturePane(sessionName, 80)
+                  if (!/\[Pasted text/i.test(pane)) break
+                  await runtime.sendKeys(sessionName, 'Enter')
+                }
               }
             }
             console.log(`[Ensemble] ✓ Prompt injected into ${sessionName}`)

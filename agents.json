@@ -11,7 +11,12 @@
   "claude": {
     "name": "claude",
     "command": "claude",
-    "flags": ["--dangerously-skip-permissions"],
+    "flags": [
+      "--permission-mode",
+      "auto",
+      "--allowedTools",
+      "Bash(../scripts/team-say.sh:*),Bash(../scripts/team-read.sh:*)"
+    ],
     "readyMarker": "❯",
     "inputMethod": "sendKeys",
     "color": "green",
