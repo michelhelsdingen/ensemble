@@ -7,7 +7,9 @@
 import { v4 as uuidv4 } from 'uuid'
 import { getRuntime } from './agent-runtime'
 import { getSelfHostId } from './hosts-config'
-import { buildAgentCommand } from './agent-config'
+import { buildAgentCommandParts } from './agent-config'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 export interface SpawnedAgent {
   id: string
@@ -25,14 +27,39 @@ interface SpawnAgentOptions {
   hostId?: string
 }
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const REPO_ROOT = path.resolve(__dirname, '..')
+
 /** Compute tmux session name from agent name */
 function computeSessionName(agentName: string): string {
   return agentName.replace(/[^a-zA-Z0-9\-_.]/g, '')
 }
 
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 /** Resolve program name to CLI command using agents.json config */
-function resolveStartCommand(program: string): string {
-  return buildAgentCommand(program)
+function resolveStartCommand(program: string, cwd: string): string {
+  const parts = buildAgentCommandParts(program)
+  const normalized = program.toLowerCase()
+
+  if (
+    normalized.includes('codex')
+    && !parts.some(part => part === '-C' || part === '--cd' || part.startsWith('--cd='))
+  ) {
+    parts.push('--cd', cwd)
+  }
+
+  if (
+    normalized.includes('claude')
+    && cwd !== REPO_ROOT
+    && !parts.some(part => part === '--add-dir' || part.startsWith('--add-dir='))
+  ) {
+    parts.push('--add-dir', REPO_ROOT)
+  }
+
+  return parts.map(shellEscape).join(' ')
 }
 
 /**
@@ -52,7 +79,7 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   await new Promise(r => setTimeout(r, 300))
 
   // Start the AI program
-  const startCommand = resolveStartCommand(options.program)
+  const startCommand = resolveStartCommand(options.program, cwd)
 
   // Forward ENSEMBLE_* and agent-specific env vars to tmux session
   const envForward = Object.entries(process.env)
@@ -62,7 +89,7 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
     .join('; ')
   const envPrefix = envForward ? `${envForward}; ` : ''
 
-  await runtime.sendKeys(sessionName, `unset CLAUDECODE; ${envPrefix}${startCommand}`, { literal: true, enter: true })
+  await runtime.sendKeys(sessionName, `unset CLAUDECODE; ${envPrefix}exec ${startCommand}`, { literal: true, enter: true })
 
   console.log(`[Spawner] Agent ${options.name} started in tmux session ${sessionName}`)
 

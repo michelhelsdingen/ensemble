@@ -121,14 +121,15 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  if (isRateLimited(getClientIp(req))) {
-    return json(res, { error: 'Rate limit exceeded' }, 429, origin)
-  }
-
   try {
     // Health check
     if (path === '/api/v1/health') {
       return json(res, { status: 'healthy', version: '1.0.0' }, 200, origin)
+    }
+
+    const isInternalEnsembleApi = path.startsWith('/api/ensemble/')
+    if (!isInternalEnsembleApi && isRateLimited(getClientIp(req))) {
+      return json(res, { error: 'Rate limit exceeded' }, 429, origin)
     }
 
     // List teams / Create team

@@ -29,6 +29,12 @@ export function clearAgentsConfigCache(): void {
   _cache = null
 }
 
+function shellEscape(token: string): string {
+  return /^[a-zA-Z0-9_./:=+-]+$/.test(token)
+    ? token
+    : `'${token.replace(/'/g, `'\\''`)}'`
+}
+
 /**
  * Resolve a program string (e.g. "codex", "claude code", "claude-code") to its AgentProgram config.
  * Falls back to "claude" if no match found.
@@ -60,7 +66,7 @@ export function resolveAgentProgram(program: string): AgentProgram {
 /**
  * Build the full CLI command for an agent, including env-level flags.
  */
-export function buildAgentCommand(program: string): string {
+export function buildAgentCommandParts(program: string): string[] {
   const agent = resolveAgentProgram(program)
   const envFlags = (process.env['ENSEMBLE_AGENT_FLAGS'] ?? '').trim()
 
@@ -84,5 +90,9 @@ export function buildAgentCommand(program: string): string {
     }
   }
 
-  return [agent.command, envFlags, defaultTokens.join(' ')].filter(Boolean).join(' ')
+  return [agent.command, ...envTokens, ...defaultTokens]
+}
+
+export function buildAgentCommand(program: string): string {
+  return buildAgentCommandParts(program).map(shellEscape).join(' ')
 }

@@ -23,6 +23,8 @@ Thumbs.db
 # Runtime data
 *.log
 /tmp/
+.ensemble-data/
+.npm-cache/
 
 # JSONL persistence files (local data)
 *.jsonl

@@ -2,7 +2,8 @@
 
 /**
  * ensemble CLI — bin wrapper
- * Runs the TypeScript CLI entrypoint via tsx.
+ * Runs the TypeScript CLI entrypoint via Node's loader import. This avoids
+ * tsx CLI IPC socket issues on long filesystem paths.
  */
 
 const { execFileSync } = require('child_process');
@@ -29,21 +30,8 @@ function findPackageRoot() {
 const root = findPackageRoot();
 const cli = join(root, 'cli', 'ensemble.ts');
 
-// Find tsx: own node_modules, hoisted, or PATH
-function findTsx() {
-  const candidates = [
-    join(root, 'node_modules', '.bin', 'tsx'),
-    join(root, '..', '.bin', 'tsx'),
-    join(root, '..', '..', '.bin', 'tsx'),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return 'tsx';
-}
-
 try {
-  execFileSync(findTsx(), [cli, ...process.argv.slice(2)], {
+  execFileSync(process.execPath, ['--import', 'tsx', cli, ...process.argv.slice(2)], {
     cwd: root,
     stdio: 'inherit',
     env: Object.assign({}, process.env, { ENSEMBLE_ROOT: root }),
