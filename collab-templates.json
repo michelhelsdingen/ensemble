@@ -7,10 +7,12 @@
       "roles": [
         {
           "role": "REVIEWER",
+          "expert": "steve-mcconnell",
           "focus": "Read the code thoroughly and describe what it does, how it works, and document its behavior. Provide a clear summary of the architecture, data flow, and key decisions."
         },
         {
           "role": "CRITIC",
+          "expert": "julia-galef",
           "focus": "Analyze the code for bugs, security issues, performance problems, and improvement opportunities. Challenge assumptions and suggest concrete fixes with code examples."
         }
       ]
@@ -22,10 +24,12 @@
       "roles": [
         {
           "role": "ARCHITECT",
+          "expert": "vaughn-vernon",
           "focus": "Plan the architecture, break down the task into clear steps, define interfaces and contracts. Review the worker's code for correctness and design alignment. Share your plan before any coding starts."
         },
         {
           "role": "DEVELOPER",
+          "expert": "robert-c-martin",
           "focus": "Write the implementation code and tests based on the architect's plan. Report progress after each step, surface blockers quickly, and ensure all tests pass before marking complete."
         }
       ]
@@ -37,10 +41,12 @@
       "roles": [
         {
           "role": "RESEARCHER-A",
+          "expert": "brian-nosek",
           "focus": "Independently research the topic from a technical/implementation angle. Focus on how things work, existing solutions, code examples, and technical trade-offs. Share your findings for comparison."
         },
         {
           "role": "RESEARCHER-B",
+          "expert": "philip-tetlock",
           "focus": "Independently research the topic from an ecosystem/alternatives angle. Focus on available tools, libraries, best practices, community patterns, and real-world usage. Share your findings for comparison."
         }
       ]
@@ -52,10 +58,12 @@
       "roles": [
         {
           "role": "REPRODUCER",
+          "expert": "michael-feathers",
           "focus": "Reproduce the bug reliably. Create a minimal reproduction case, document exact steps to trigger it, capture error messages and stack traces. Share reproduction steps with your teammate."
         },
         {
           "role": "ANALYST",
+          "expert": "karl-popper",
           "focus": "Analyze the root cause of the bug. Read relevant code paths, trace the execution flow, identify where the logic breaks down. Propose and implement a fix once the reproducer confirms the bug."
         }
       ]
@@ -67,10 +75,12 @@
       "roles": [
         {
           "role": "BUILDER",
+          "expert": "robert-c-martin",
           "focus": "Implement the requested change. Write clean, correct code. After the adversary finds issues, fix them and explain your fix. Your goal: code that survives all attacks."
         },
         {
           "role": "ADVERSARY",
+          "expert": "julia-galef",
           "focus": "Your ONLY job is to find bugs, edge cases, and failures. Write tests that break the builder's code. Check race conditions, boundary values, error handling, security. Never approve until you've tried at least 10 attack vectors. Be ruthless."
         }
       ]
@@ -82,10 +92,12 @@
       "roles": [
         {
           "role": "QUANT",
+          "expert": "howard-marks",
           "focus": "Design the strategy: entry/exit logic, indicators, parameters. Read existing strategies in scripts/paper/strategies/ for patterns. Define clear hypothesis and expected edge. Share design before implementation."
         },
         {
           "role": "VALIDATOR",
+          "expert": "philip-tetlock",
           "focus": "Backtest the quant's strategy. Run scripts/backtest/test_correctness.py. Check for overfitting, survivorship bias, fee assumptions. Challenge every assumption. Only approve if Sharpe > 1.0 and profit factor > 1.2 on out-of-sample data."
         }
       ]
@@ -97,11 +109,92 @@
       "roles": [
         {
           "role": "RESEARCHER-PRIMARY",
+          "expert": "brian-nosek",
           "focus": "Research from primary sources: documentation, code, APIs, databases. Focus on FACTS and DATA. Share numbered findings. After comparing with secondary researcher, rate each finding: CONFIRMED (both found it), UNIQUE (only you found it), CONTRADICTED (disagreement)."
         },
         {
           "role": "RESEARCHER-SECONDARY",
+          "expert": "carl-sagan",
           "focus": "Research from secondary sources: papers, forums, community, real-world examples. Focus on CONTEXT and PATTERNS. Share numbered findings. After comparing with primary researcher, challenge any finding that lacks evidence. Only CONFIRMED findings go into final report."
+        }
+      ]
+    },
+    "triple-with-runner": {
+      "name": "Triple with Test Runner",
+      "description": "Opus architect + GPT-5 builder/adversary + Haiku test-runner. Haiku offloads verify/test/grep work.",
+      "suggestedTaskPrefix": "Build with continuous verification:",
+      "suggestedAgents": ["claude", "codex", "haiku"],
+      "roles": [
+        {
+          "role": "ARCHITECT",
+          "expert": "vaughn-vernon",
+          "focus": "Plan architecture and decompose the task. Review diffs for design alignment. Do NOT run tests yourself — delegate to TEST-RUNNER. Keep your context clean for reasoning."
+        },
+        {
+          "role": "BUILDER-ADVERSARY",
+          "expert": "michael-feathers",
+          "focus": "Implement the architect's plan AND challenge it. After each meaningful diff, ping TEST-RUNNER with a specific check request (e.g. 'run verify_system.py' or 'grep consumers of X'). Never mark done until TEST-RUNNER reports green."
+        },
+        {
+          "role": "TEST-RUNNER",
+          "expert": "w-edwards-deming",
+          "focus": "You are the mechanical work agent. Run: verify_system.py, test_correctness.py, grep searches, file reads on request. Report results in structured form: PASS/FAIL + line numbers + exact output. Do NOT write code. Do NOT opinionate. Just execute and report. You enable the other two to focus on reasoning."
+        }
+      ]
+    },
+    "ultrareview": {
+      "name": "Ultra Review",
+      "description": "Four specialized agents review in parallel: security, logic, performance, style. Synthesize into one verdict.",
+      "suggestedTaskPrefix": "Ultra-review the following code:",
+      "suggestedAgents": ["claude", "claude2", "sonnet", "haiku"],
+      "roles": [
+        {
+          "role": "SECURITY-REVIEWER",
+          "expert": "ignacio-cofone",
+          "focus": "Hunt for security vulnerabilities ONLY: injection, auth bypass, secrets exposure, IDOR, path traversal, XSS, SSRF, race conditions on shared state. For each finding: severity (CRITICAL/HIGH/MEDIUM/LOW) + exact line + exploit scenario + fix. Ignore style and performance — not your domain."
+        },
+        {
+          "role": "LOGIC-REVIEWER",
+          "expert": "karl-popper",
+          "focus": "Hunt for logic bugs ONLY: incorrect conditionals, off-by-one errors, wrong assumptions about data shape, missing edge cases (null, empty, overflow), incorrect state transitions, subtle algorithmic errors. For each finding: what the code DOES vs what it SHOULD DO + exact line + minimal reproduction. Ignore security and style."
+        },
+        {
+          "role": "PERFORMANCE-REVIEWER",
+          "expert": "w-edwards-deming",
+          "focus": "Hunt for performance issues ONLY: O(n²) loops, N+1 queries, blocking I/O in hot paths, unnecessary re-renders/recomputation, memory leaks, missing caches. For each finding: current complexity + expected load impact + concrete fix with complexity estimate. Ignore security and style."
+        },
+        {
+          "role": "STYLE-REVIEWER",
+          "expert": "robert-c-martin",
+          "focus": "Review code quality ONLY: naming clarity, dead code, unnecessary complexity, missing error handling at system boundaries, inconsistent patterns, code that will confuse future readers. Do NOT rewrite working code. For each finding: what's confusing + why + minimal fix. Ignore security and performance."
+        }
+      ]
+    },
+    "premium-quad": {
+      "name": "Premium Quad for Critical Work",
+      "description": "Opus architect + Sonnet implementer + GPT-5.4 adversary + GPT-5.4-mini independent reviewer. For live deploys, security, irreversible calls.",
+      "suggestedTaskPrefix": "Critical work with independent review:",
+      "suggestedAgents": ["claude", "sonnet", "codex", "codex-mini"],
+      "roles": [
+        {
+          "role": "ARCHITECT",
+          "expert": "vaughn-vernon",
+          "focus": "You are Opus 4.7. Design the plan, define success criteria, write the spec. You decide 'done'. Do NOT implement yourself — delegate to IMPLEMENTER."
+        },
+        {
+          "role": "IMPLEMENTER",
+          "expert": "steve-mcconnell",
+          "focus": "You are Sonnet 4.6. Execute the architect's spec. Write the code. Run local tests. Report diffs + test output after each step."
+        },
+        {
+          "role": "ADVERSARY",
+          "expert": "julia-galef",
+          "focus": "You are GPT-5. Your only job: find failure modes in the implementer's work. Edge cases, race conditions, misread specs, hidden assumptions. Write attack tests. Never approve until you've tried 10 attack vectors."
+        },
+        {
+          "role": "REVIEWER",
+          "expert": "philip-tetlock",
+          "focus": "You are GPT-5.4-mini running independently. You did NOT participate in implementation. Read the final diff + adversary report + test results. Answer ONE question: does this meet the spec with zero unacceptable risk? YES/NO + reasoning. You are the gate — be strict."
         }
       ]
     }

@@ -2,22 +2,22 @@
   "codex": {
     "name": "codex",
     "command": "codex",
-    "flags": ["--full-auto"],
+    "flags": ["--dangerously-bypass-approvals-and-sandbox"],
     "readyMarker": "›",
     "inputMethod": "pasteFromFile",
     "color": "blue",
     "icon": "◆",
-    "postReadyDelayMs": 2000
+    "postReadyDelayMs": 8000
   },
   "claude": {
     "name": "claude",
     "command": "claude",
-    "flags": ["--dangerously-skip-permissions"],
+    "flags": ["--dangerously-skip-permissions", "--model", "opus", "--effort", "xhigh", "--strict-mcp-config", "--mcp-config", "/Users/aimusic/.openclaw/tools/ensemble/empty-mcp.json"],
     "readyMarker": "❯",
     "inputMethod": "pasteFromFile",
     "color": "green",
     "icon": "●",
-    "postReadyDelayMs": 3000
+    "postReadyDelayMs": 6000
   },
   "aider": {
     "name": "aider",
@@ -49,11 +49,51 @@
   "claude2": {
     "name": "claude2",
     "command": "claude",
-    "flags": ["--dangerously-skip-permissions"],
+    "flags": ["--dangerously-skip-permissions", "--model", "opus", "--effort", "xhigh"],
     "readyMarker": "❯",
     "inputMethod": "pasteFromFile",
     "color": "yellow",
     "icon": "◇",
     "postReadyDelayMs": 3000
+  },
+  "claude-auto": {
+    "name": "claude-auto",
+    "command": "claude",
+    "flags": ["--permission-mode", "auto", "--model", "opus", "--effort", "xhigh", "--strict-mcp-config", "--mcp-config", "/Users/aimusic/.openclaw/tools/ensemble/empty-mcp.json"],
+    "readyMarker": "❯",
+    "inputMethod": "pasteFromFile",
+    "color": "green",
+    "icon": "⬡",
+    "postReadyDelayMs": 6000
+  },
+  "sonnet": {
+    "name": "sonnet",
+    "command": "claude",
+    "flags": ["--dangerously-skip-permissions", "--model", "sonnet", "--strict-mcp-config", "--mcp-config", "/Users/aimusic/.openclaw/tools/ensemble/empty-mcp.json"],
+    "readyMarker": "❯",
+    "inputMethod": "pasteFromFile",
+    "color": "cyan",
+    "icon": "◆",
+    "postReadyDelayMs": 5000
+  },
+  "haiku": {
+    "name": "haiku",
+    "command": "claude",
+    "flags": ["--dangerously-skip-permissions", "--model", "haiku", "--strict-mcp-config", "--mcp-config", "/Users/aimusic/.openclaw/tools/ensemble/empty-mcp.json"],
+    "readyMarker": "❯",
+    "inputMethod": "pasteFromFile",
+    "color": "white",
+    "icon": "▪",
+    "postReadyDelayMs": 3000
+  },
+  "codex-mini": {
+    "name": "codex-mini",
+    "command": "codex",
+    "flags": ["--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5.4-mini"],
+    "readyMarker": "›",
+    "inputMethod": "pasteFromFile",
+    "color": "red",
+    "icon": "◈",
+    "postReadyDelayMs": 8000
   }
 }

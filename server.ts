@@ -7,6 +7,7 @@ import http from 'http'
 import {
   createEnsembleTeam, getEnsembleTeam, listEnsembleTeams,
   getTeamFeed, sendTeamMessage, disbandTeam,
+  getTeamHealth, getEnsembleMetrics,
 } from './services/ensemble-service'
 import { getTeam } from './lib/ensemble-registry'
 
@@ -202,6 +203,20 @@ const server = http.createServer(async (req, res) => {
       const since = url.searchParams.get('since') || undefined
       const result = getTeamFeed(feedMatch[1], since)
       if (result.error) return json(res, { error: result.error }, result.status, origin)
+      return json(res, result.data, result.status, origin)
+    }
+
+    // B3: Team health endpoint — diagnostic snapshot
+    const healthMatch = path.match(/^\/api\/ensemble\/teams\/([^/]+)\/health$/)
+    if (healthMatch && method === 'GET') {
+      const result = getTeamHealth(healthMatch[1])
+      if (result.error) return json(res, { error: result.error }, result.status, origin)
+      return json(res, result.data, result.status, origin)
+    }
+
+    // C2: aggregate metrics
+    if (path === '/api/ensemble/metrics' && method === 'GET') {
+      const result = getEnsembleMetrics()
       return json(res, result.data, result.status, origin)
     }
 

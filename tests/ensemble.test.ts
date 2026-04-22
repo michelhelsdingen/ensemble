@@ -126,7 +126,10 @@ describe('getMessages() — dual store merge', () => {
     expect(result.map(m => m.id)).toEqual(['feed-msg', 'tmp-msg'])
   })
 
-  it('deduplicates messages with same id (feed.jsonl wins)', async () => {
+  it('deduplicates messages with same id (canonical /tmp wins)', async () => {
+    // Fix 1 made /tmp/ensemble/<id>/messages.jsonl the canonical single-writer
+    // store; ENSEMBLE_DIR/messages/feed.jsonl is now a legacy read-only
+    // fallback. On dedup collisions the canonical source must win.
     const sharedId = 'shared-id'
     const feedDir = path.join(tempRoot, 'ensemble', 'messages', teamId)
     writeJsonl(path.join(feedDir, 'feed.jsonl'), [
@@ -141,7 +144,7 @@ describe('getMessages() — dual store merge', () => {
 
     const matching = result.filter(m => m.id === sharedId)
     expect(matching).toHaveLength(1)
-    expect(matching[0].content).toBe('from feed')
+    expect(matching[0].content).toBe('from tmp')
   })
 
   it('sorts messages by timestamp ascending, missing timestamps last', async () => {
@@ -320,10 +323,14 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
   })
 
   it('auto-disbands on low-confidence signals after extended idle (5min)', async () => {
+    // Fix 10/FM16 tightened LOW_CONFIDENCE patterns: bare prose like "done" or
+    // "wrapping up" no longer fires — it caused false-positive disbands while
+    // agents were still working. Use patterns that DO match the current set
+    // (e.g. "all work done", "collab finished") to exercise the 5min-idle path.
     const team = makeTeam()
     const messages: EnsembleMessage[] = [
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T11:58:00.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Wrapping up', timestamp: '2026-03-18T11:58:10.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'all work done from my end', timestamp: '2026-03-18T11:58:00.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'collab finished — nothing else to add', timestamp: '2026-03-18T11:58:10.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)

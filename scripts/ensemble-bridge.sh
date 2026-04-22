@@ -128,15 +128,21 @@ with open('$FILE') as f:
                 success = True
                 break
             except urllib.error.HTTPError as e:
-                if 400 <= e.code < 500:
-                    print(f'[bridge] client error {e.code} on line {i}, skipping: {e}', file=sys.stderr, flush=True)
-                    success = True  # skip permanently, don't retry client errors
+                # 429 (rate limit) and 408 (request timeout) are transient —
+                # must be retried or messages are silently lost. 5xx obviously.
+                # Other 4xx (400/401/403/404) indicate bad payload or missing
+                # team: log loudly and skip so one bad line cannot stall the
+                # feed forever.
+                if e.code in (408, 429) or e.code >= 500:
+                    delay = min(30.0, 0.5 * (2 ** attempt))
+                    print(f'[bridge] transient {e.code} line {i}, retry {attempt+1}/10 in {delay:.1f}s: {e}', file=sys.stderr, flush=True)
+                    if attempt == 9:
+                        break
+                    time.sleep(delay)
+                else:
+                    print(f'[bridge] client error {e.code} on line {i}, DROPPING: {e}', file=sys.stderr, flush=True)
+                    success = True  # skip permanently — bad request will never succeed
                     break
-                delay = min(30.0, 0.5 * (2 ** attempt))
-                print(f'[bridge] server error line {i}, retry {attempt+1}/10 in {delay:.1f}s: {e}', file=sys.stderr, flush=True)
-                if attempt == 9:
-                    break
-                time.sleep(delay)
             except (urllib.error.URLError, OSError) as e:
                 delay = min(30.0, 0.5 * (2 ** attempt))
                 print(f'[bridge] network error line {i}, retry {attempt+1}/10 in {delay:.1f}s: {e}', file=sys.stderr, flush=True)

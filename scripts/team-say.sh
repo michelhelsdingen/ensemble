@@ -33,7 +33,10 @@ msg = {
     'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
 }
 
-# Acquire mkdir-based lock (compatible with ensemble-registry.ts appendMessage)
+# Acquire mkdir-based lock (compatible with ensemble-registry.ts appendMessage).
+# Fail loudly on timeout instead of appending without the lock — otherwise two
+# concurrent writers under contention produce torn JSONL rows (exactly the
+# scenario the lock was meant to prevent).
 start = time.time()
 acquired = False
 while time.time() - start < 5.0:
@@ -50,12 +53,15 @@ while time.time() - start < 5.0:
             pass
         time.sleep(0.05)
 
+if not acquired:
+    print(f'team-say: timed out acquiring lock at {lock_dir} after 5s', file=sys.stderr)
+    sys.exit(2)
+
 try:
     with open(output_path, 'a', encoding='utf-8') as f:
         f.write(json.dumps(msg) + '\n')
 finally:
-    if acquired:
-        import shutil; shutil.rmtree(lock_dir, ignore_errors=True)
+    import shutil; shutil.rmtree(lock_dir, ignore_errors=True)
 " "$TEAM_ID" "$FROM" "$TO" "$MSG" "$FILE" "$LOCK_DIR"
 
 echo "Sent to $TO"

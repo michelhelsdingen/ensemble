@@ -43,7 +43,7 @@ export interface AgentRuntime {
 
   // I/O
   sendKeys(name: string, keys: string, opts?: { literal?: boolean; enter?: boolean }): Promise<void>
-  pasteFromFile(name: string, filePath: string): Promise<void>
+  pasteFromFile(name: string, filePath: string): Promise<boolean>
   capturePane(name: string, lines?: number): Promise<string>
 
   // Environment
@@ -225,20 +225,64 @@ export class TmuxRuntime implements AgentRuntime {
    * More reliable than send-keys -l for TUI apps (e.g., Codex) that don't
    * handle literal key injection well. Sends Enter after pasting.
    */
-  async pasteFromFile(name: string, filePath: string): Promise<void> {
+  // A1: returns true on verified delivery, false if all retries failed.
+  // Service layer must branch on result (disband on false).
+  async pasteFromFile(name: string, filePath: string): Promise<boolean> {
     const sName = this.sanitizeName(name)
     const bufName = `orch-${sName}`
     const sPath = filePath.replace(/[^a-zA-Z0-9\-_./~ ]/g, '')
-    await execAsync(`tmux load-buffer -b "${bufName}" "${sPath}"`)
-    await execAsync(`tmux paste-buffer -b "${bufName}" -t "${sName}"`)
-    // Delay to let the TUI process the paste, then send Enter twice
-    // (some TUIs like Gemini CLI need an extra Enter after paste)
-    await new Promise(r => setTimeout(r, 1000))
-    await execAsync(`tmux send-keys -t "${sName}" Enter`)
-    await new Promise(r => setTimeout(r, 300))
-    await execAsync(`tmux send-keys -t "${sName}" Enter`)
-    // Clean up buffer
+
+    // Fix 4: stronger verification signature — use multiple distinctive tokens
+    // from the prompt, not just the first 6-letter word. "Progress"/"Task"/"ROLE"
+    // often already exist in the pane from prior output, causing false positives.
+    // We pick tokens ≥9 chars (rare in scrollback) AND one rare word.
+    const signatures: string[] = []
+    try {
+      const fs = await import('fs')
+      const content = fs.readFileSync(filePath, 'utf-8')
+      // Long tokens (9+ chars) are more discriminative
+      const longTokens = [...content.matchAll(/[A-Za-zČŠŽčšž0-9_-]{9,}/g)]
+        .map(m => m[0])
+        .filter(t => !/^(Progress|Standing|Received|Instructions|Implementation)$/i.test(t))
+      // Take first 2 unique long tokens as signatures
+      const seen = new Set<string>()
+      for (const t of longTokens) {
+        if (seen.has(t)) continue
+        seen.add(t)
+        signatures.push(t)
+        if (signatures.length >= 2) break
+      }
+    } catch {}
+
+    const doPaste = async () => {
+      await execAsync(`tmux load-buffer -b "${bufName}" "${sPath}"`)
+      await execAsync(`tmux paste-buffer -b "${bufName}" -t "${sName}"`)
+      await new Promise(r => setTimeout(r, 1500))
+      await execAsync(`tmux send-keys -t "${sName}" Enter`)
+      await new Promise(r => setTimeout(r, 400))
+      await execAsync(`tmux send-keys -t "${sName}" Enter`)
+    }
+
+    // Attempt + verify + retry twice (3 total attempts).
+    let verified = false
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await doPaste()
+      if (signatures.length === 0) { verified = true; break }
+      // Wait for TUI to ingest, then check pane for ALL signatures (AND semantic)
+      await new Promise(r => setTimeout(r, 2000))
+      try {
+        const { stdout } = await execAsync(`tmux capture-pane -t "${sName}" -p -S -200`)
+        const allPresent = signatures.every(s => stdout.includes(s))
+        if (allPresent) { verified = true; break }
+        console.warn(`[Runtime] Paste verify failed on ${sName} (attempt ${attempt + 1}/3): missing ${signatures.filter(s => !stdout.includes(s)).join(', ')}`)
+      } catch {}
+    }
+    if (!verified && signatures.length > 0) {
+      console.error(`[Runtime] Paste verification EXHAUSTED for ${sName} — prompt may not have landed. Signatures: ${signatures.join(', ')}`)
+    }
+
     await execAsync(`tmux delete-buffer -b "${bufName}" 2>/dev/null || true`)
+    return verified
   }
 
   async capturePane(name: string, lines: number = 2000): Promise<string> {

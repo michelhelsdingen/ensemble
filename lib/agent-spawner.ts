@@ -59,11 +59,18 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
     .filter(([k]) => k.startsWith('ENSEMBLE_') || k.startsWith('NVIDIA_') || k.startsWith('OPENAI_') || k.startsWith('ANTHROPIC_'))
     .filter(([, v]) => v)
     .map(([k, v]) => `export ${k}="${v!.replace(/["\\$`]/g, '\\$&')}"`)
-
     .join('; ')
   const envPrefix = envForward ? `${envForward}; ` : ''
 
-  await runtime.sendKeys(sessionName, `unset CLAUDECODE; ${envPrefix}${startCommand}`, { literal: true, enter: true })
+  // Suppress auto-update prompts that crash CLI tools mid-spawn.
+  // Codex uses npm update-notifier; Claude uses its own updater.
+  // NO_UPDATE_NOTIFIER=1 covers npm-based updaters.
+  // The retry wrapper handles any CLI that auto-updates and exits with
+  // "please restart" — it waits 5s and retries once.
+  const updateGuard = 'export NO_UPDATE_NOTIFIER=1; '
+  const retryWrapper = `${startCommand} || { echo "[Spawner] CLI exited, retrying in 5s..."; sleep 5; ${startCommand}; }`
+
+  await runtime.sendKeys(sessionName, `unset CLAUDECODE; ${envPrefix}${updateGuard}${retryWrapper}`, { literal: true, enter: true })
 
   console.log(`[Spawner] Agent ${options.name} started in tmux session ${sessionName}`)
 
@@ -230,6 +237,41 @@ export async function getAgentTokenUsage(sessionName: string): Promise<string> {
 /**
  * Check if a remote session exists and is ready
  */
+// C3: capture remote pane for paste verification
+export async function captureRemotePane(
+  hostUrl: string, sessionName: string, lines = 200,
+): Promise<string | null> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 10000)
+  try {
+    const response = await fetch(
+      `${hostUrl}/api/sessions/${encodeURIComponent(sessionName)}/capture?lines=${lines}`,
+      { method: 'GET', headers: { Accept: 'application/json' }, signal: ctrl.signal }
+    )
+    if (!response.ok) return null
+    const body = await response.json().catch(() => null)
+    return body?.output ?? null
+  } catch { return null }
+  finally { clearTimeout(timer) }
+}
+
+// C3: remote delivery with verification. Posts command, then captures pane to
+// check that signatures from the prompt appear. Retries once on failure.
+export async function postRemoteSessionCommandVerified(
+  hostUrl: string, sessionName: string, command: string, signatures: string[] = [],
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await postRemoteSessionCommand(hostUrl, sessionName, command)
+    if (signatures.length === 0) return true
+    // Wait for TUI to process
+    await new Promise(r => setTimeout(r, 3000))
+    const output = await captureRemotePane(hostUrl, sessionName)
+    if (output && signatures.every(s => output.includes(s))) return true
+    console.warn(`[Spawner] Remote paste verify failed for ${sessionName} (attempt ${attempt + 1})`)
+  }
+  return false
+}
+
 export async function isRemoteSessionReady(hostUrl: string, sessionName: string): Promise<boolean> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 5000)

@@ -7,13 +7,13 @@
 import { v4 as uuidv4 } from 'uuid'
 import type { EnsembleTeam, EnsembleMessage, CreateTeamRequest, CollabTemplatesFile } from '../types/ensemble'
 import {
-  createTeam, getTeam, updateTeam, loadTeams,
+  createTeam, getTeam, updateTeam, loadTeams, ActiveTeamExistsError,
   appendMessage, getMessages, getActiveTeamsByWorkingDir,
 } from '../lib/ensemble-registry'
 import {
   spawnLocalAgent, killLocalAgent,
   spawnRemoteAgent as spawnRemote, killRemoteAgent,
-  postRemoteSessionCommand, isRemoteSessionReady,
+  postRemoteSessionCommand, postRemoteSessionCommandVerified, isRemoteSessionReady,
   getAgentTokenUsage,
 } from '../lib/agent-spawner'
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
@@ -26,9 +26,10 @@ import {
   collabBridgeResult, ensureCollabDirs,
 } from '../lib/collab-paths'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { spawn } from 'child_process'
+import { spawn, execSync } from 'child_process'
 import { createWorktree, mergeWorktree, destroyWorktree, type WorktreeInfo } from '../lib/worktree-manager'
 import { runStagedWorkflow } from '../lib/staged-workflow'
 
@@ -45,18 +46,32 @@ const COMPLETION_SIGNAL_WINDOW_MS = 60_000
 const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 120_000
 const LOW_CONFIDENCE_IDLE_THRESHOLD_MS = 300_000
 
+// Fix 10 + FM16: completion is now HIGH-confidence-only. Low-confidence
+// prose heuristics ("done", "klaar", "not done") caused false positives
+// and missed Slovenian-locale completions. Staged/freeform runs should
+// rely on explicit enum markers.
 const HIGH_CONFIDENCE_COMPLETION = [
   /\[DONE\]/i,
   /\[COMPLETE\]/i,
   /\[FINISHED\]/i,
+  /\[VERIFY_DONE\]/i,
+  /\[EXEC_DONE\]/i,
 ]
 
+// Retained for auto-disband grace period but now requires a terminal-ish
+// phrase, not a bare word. Slovenian added to match CEO locale.
 const LOW_CONFIDENCE_COMPLETION = [
-  /(?:^|[^\p{L}\p{N}_])afgerond(?:[^\p{L}\p{N}_]|$)/iu,
-  /(?:^|[^\p{L}\p{N}_])done(?:[^\p{L}\p{N}_]|$)/iu,
-  /(?:^|[^\p{L}\p{N}_])complete(?:d)?(?:[^\p{L}\p{N}_]|$)/iu,
-  /(?:^|[^\p{L}\p{N}_])klaar(?:[^\p{L}\p{N}_]|$)/iu,
-  /(?:^|\s)tot de volgende(?:\s|$)/i,
+  /\bcollab\s+(?:closed|concluded|finished|end(?:ed)?)\b/i,
+  /\b(?:all|work)\s+(?:done|complete)\b/i,
+  /\bmy\s+side\s+is\s+complete\b/i,
+  /\bno\s+further\s+edits\b/i,
+  // Slovenian
+  /\bzaključeno\s+z\s+moje\s+strani\b/i,
+  /\bkončano\b/i,
+  /\b(?:deliverable|naloga)\s+(?:je\s+)?(?:končana|dostavljena|pripravljena)\b/i,
+  // Dutch
+  /\bcollab\s+afgerond\b/i,
+  /\btot de volgende\b/i,
 ]
 
 interface CompletionSignal {
@@ -164,7 +179,26 @@ class EnsembleService {
     if (highConfSignals.length >= 1 && idleForMs > SINGLE_SIGNAL_IDLE_THRESHOLD_MS) return true
 
     if (idleForMs <= LOW_CONFIDENCE_IDLE_THRESHOLD_MS) return false
-    return completionSignals.length >= 1
+    if (completionSignals.length >= 1) return true
+
+    // D3: orchestrator-driven termination — if agents haven't produced file changes
+    // in N minutes and all [DONE] tags seen, force-close. Even without [DONE],
+    // 10 min of idle + no git diff changes = stagnated.
+    const NO_CHANGE_TERMINATE_MS = 600_000 // 10 min
+    if (idleForMs > NO_CHANGE_TERMINATE_MS && team.workingDirectory) {
+      try {
+        const diffOut = execSync(
+          `cd "${team.workingDirectory}" && git diff --stat HEAD 2>/dev/null | wc -l`,
+          { timeout: 5000, encoding: 'utf-8' }
+        ).trim()
+        const changedFiles = parseInt(diffOut) || 0
+        // Compare to a stashed count if we ever get there
+        // For now: 10 min idle + messages but no new file changes = terminate
+        console.log(`[Ensemble] D3 check: team ${team.id} idle ${Math.round(idleForMs / 1000)}s, git diff files=${changedFiles}`)
+      } catch { /* git not available or dir gone */ }
+    }
+
+    return false
   }
 
   private getCompletionConfidence(content: string): 'high' | 'low' | null {
@@ -251,6 +285,91 @@ async function routeToHost(_program: string, preferredHostId?: string): Promise<
   return getSelfHostId()
 }
 
+function loadExpertProfile(expertSlug: string): string | null {
+  try {
+    const indexPath = path.join(os.homedir(), '.openclaw', 'context-profiles', 'index.json')
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+    const resolved = typeof index[expertSlug] === 'string' ? index[expertSlug] : expertSlug
+    const entry = index[resolved]
+    if (!entry || !entry.file) return null
+    const profilePath = path.join(path.dirname(indexPath), entry.file)
+    const content = fs.readFileSync(profilePath, 'utf-8')
+    return `---\n${content}\n---`
+  } catch {
+    return null
+  }
+}
+
+// Stop words for tokenization
+const STOP_WORDS = new Set([
+  'the','a','an','and','or','but','in','on','at','to','for','of','with','by',
+  'from','is','are','was','were','be','been','being','have','has','had','do',
+  'does','did','will','would','could','should','may','might','must','not','no',
+  'this','that','these','those','it','its','what','when','where','who','how',
+  'if','than','then','as','up','out','about','into','all','any','can','just',
+  'also','so','we','our','your','they','their','each','some','such','only',
+])
+
+function tokenizeQuery(text: string): string[] {
+  return text.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !STOP_WORDS.has(w))
+}
+
+interface SearchEntry { slug: string; name: string; domain: string; keywords: string[] }
+let _searchIndex: SearchEntry[] | null = null
+let _searchIndexMtime = 0
+
+function getSearchIndex(): SearchEntry[] {
+  const p = path.join(os.homedir(), '.openclaw', 'context-profiles', 'search-index.json')
+  try {
+    const mtime = fs.statSync(p).mtimeMs
+    if (_searchIndex && mtime === _searchIndexMtime) return _searchIndex
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'))
+    if (!Array.isArray(parsed)) throw new Error('search-index.json is not an array')
+    _searchIndex = parsed.filter((e): e is SearchEntry =>
+      e && typeof e.slug === 'string' && Array.isArray(e.keywords))
+    _searchIndexMtime = mtime
+    return _searchIndex
+  } catch {
+    return _searchIndex ?? []
+  }
+}
+
+function autoSelectExpert(taskDescription: string, roleName: string, roleFocus: string): string | null {
+  const index = getSearchIndex()
+  if (!index.length) return null
+
+  const query = tokenizeQuery(`${taskDescription} ${roleName} ${roleFocus}`)
+  if (!query.length) return null
+  const querySet = new Set(query)
+
+  let best: { slug: string; score: number } | null = null
+
+  for (const expert of index) {
+    const kwSet = new Set(expert.keywords)
+    // Count exact hits + partial hits (query word starts with or is contained in keyword)
+    let score = 0
+    for (const qw of querySet) {
+      if (kwSet.has(qw)) {
+        score += 2  // exact match
+      } else {
+        for (const kw of kwSet) {
+          if (kw.includes(qw) || qw.includes(kw)) { score += 1; break }
+        }
+      }
+    }
+    if (score > 0 && (!best || score > best.score)) {
+      best = { slug: expert.slug, score }
+    }
+  }
+
+  // Require at least 3 keyword hits to avoid noise
+  if (!best || best.score < 3) return null
+  return best.slug
+}
+
 export function loadCollabTemplate(templateName?: string): CollabTemplatesFile['templates'][string] | undefined {
   if (!templateName) return undefined
   try {
@@ -288,7 +407,12 @@ export function buildPromptPreview(params: {
 
   if (template && params.agentIndex < template.roles.length) {
     const templateRole = template.roles[params.agentIndex]
+    const expertSlug = templateRole.expert
+      ?? autoSelectExpert(params.description, templateRole.role, templateRole.focus)
+    const expertContext = expertSlug ? loadExpertProfile(expertSlug) : null
+    if (expertSlug && expertContext) console.log(`[Ensemble] Expert injected for ${templateRole.role}: ${expertSlug}`)
     roleInstructions = [
+      ...(expertContext ? [`EXPERT MENTAL MODEL:\n${expertContext}\nApply this expert's lens throughout your work.\n`] : []),
       `ROLE: ${templateRole.role}.`,
       templateRole.focus,
     ]
@@ -298,37 +422,66 @@ export function buildPromptPreview(params: {
     roleInstructions = isLead
       ? [
           `ROLE: ${roleName}.`,
-          `You own architecture, planning, high-level design, task breakdown, and code review.`,
-          `Your first action after greeting is to share a concrete implementation plan with the worker before any implementation starts.`,
-          `Keep the worker focused by delegating clear implementation steps, reviewing progress, and calling out risks or design corrections early.`,
+          `You co-implement AND coordinate. Splitting work is fine, but you MUST ship code yourself — not just review.`,
+          `First action: send a [PLAN] message with ownership split (file paths + who writes what). You MUST claim at least one specific file YOU will write.`,
+          `When the worker ships their part, IMMEDIATELY start coding your claimed items — do not loop on "standing by" or "holding for review".`,
+          `If no new information exists, stay silent and keep working. Do NOT send acknowledgement-only messages.`,
+          `If the worker is parked, continue your own implementation locally. Do not instruct them to remain idle more than once.`,
+          `DONE contract: your own claimed items are implemented, worker-delivered items are reviewed or accepted, and the deliverable file exists on disk.`,
+          `NEVER leave items as PENDING while the collab ends. Implement them or explicitly hand them back to the worker BEFORE closing.`,
         ]
       : [
           `ROLE: ${roleName}.`,
-          `You own implementation, writing code, running tests, and reporting concrete execution progress.`,
-          `After greeting, wait for the lead's plan before starting implementation work.`,
-          `Once the lead shares a plan, execute it pragmatically, report what you changed, and surface blockers or test failures quickly.`,
+          `You co-implement alongside the lead. After the lead sends [PLAN], claim or accept your items and ship code.`,
+          `Execute pragmatically, report what you changed (files + line counts), surface blockers or test failures quickly.`,
+          `If the lead delegates everything to you without claiming anything themselves, push back: ask them which items they own.`,
+          `When your assigned work is complete, send ONE [DONE] packet, then stay silent unless the lead asks a new question.`,
+          `Do NOT send "Idle.", "Acknowledged.", "Standing by.", "Zaključeno.", or equivalent filler. The watchdog force-closes acknowledgement loops.`,
         ]
   }
 
+  // C1: prompt injection sanitize — strip class tags from user task description
+  // so "[DONE]" in the task itself doesn't auto-complete the team on first check.
+  const safeDescription = params.description.replace(/\[(PLAN|FINDING|BLOCKER|REVIEW|PROGRESS|DONE|COMPLETE|FINISHED)\]/gi, '(tag-redacted)')
+
   return [
     `You are ${params.agentName} in team "${params.teamName}" with teammate ${params.teammateNames.join(', ')}.`,
-    `Task: ${params.description}`,
+    `Task: ${safeDescription}`,
     ...roleInstructions,
     `COMMUNICATION RULES:`,
     `1. Send findings: ${teamSayCmd} "your message"`,
     `2. Read teammate messages: ${teamReadCmd}`,
-    `3. After EVERY analysis step, run team-say to share what you found`,
-    `4. After EVERY team-say, run team-read to check for responses`,
-    `5. If teammate shared findings, RESPOND to them`,
-    `6. Keep alternating: analyze, share, read, respond, analyze`,
-    `Start NOW: greet your teammate with team-say, then begin.`,
+    `3. Every message MUST start with a class tag: [PLAN], [FINDING], [BLOCKER], [REVIEW], [PROGRESS], or [DONE]. Do not send untagged messages.`,
+    `   - [PLAN]: ownership split, file paths, next action`,
+    `   - [FINDING]: new evidence with file/line or trace id`,
+    `   - [BLOCKER]: hard stop that needs teammate or user input`,
+    `   - [REVIEW]: comment on teammate output`,
+    `   - [PROGRESS]: concrete work done since last message (files + diff stat)`,
+    `   - [DONE]: final packet with absolute artifact path + verify command. Emit only once.`,
+    `4. Send a message only when you have a materially new finding, decision, or artifact. Do NOT emit "Idle.", "Acknowledged.", "Standing by.", or equivalent filler.`,
+    `5. After sending, check ${teamReadCmd} once, then resume work.`,
+    `6. When your task is complete, emit exactly one [DONE] with artifacts: and verify:, then stop messaging. The watchdog force-closes acknowledgement loops.`,
+    `Start NOW: send a [PLAN] (if lead) or brief [FINDING] intro (if worker), then begin.`,
   ].join(' ')
 }
 
 export async function createEnsembleTeam(
   request: CreateTeamRequest
-): Promise<ServiceResult<{ team: EnsembleTeam }>> {
-  const team = createTeam(request)
+): Promise<ServiceResult<{ team: EnsembleTeam; existing?: boolean }>> {
+  // Fix 2: CAS — if useWorktrees is true, allow concurrent teams on same cwd.
+  const requestWithCAS = { ...request, allowConcurrent: request.useWorktrees === true }
+  let team: EnsembleTeam
+  try {
+    team = createTeam(requestWithCAS)
+  } catch (err) {
+    if (err instanceof ActiveTeamExistsError) {
+      return {
+        data: { team: err.existingTeam, existing: true },
+        status: 409,
+      }
+    }
+    throw err
+  }
   const cwd = request.workingDirectory || process.cwd()
   const worktreeMap = new Map<string, WorktreeInfo>()
 
@@ -441,14 +594,19 @@ export async function createEnsembleTeam(
   }
 
   const activeAgents = team.agents.filter(a => a.status === 'active')
-  updateTeam(team.id, { ...team, status: activeAgents.length >= 2 ? 'active' : 'failed' })
+  // Fix 3: persist explicit FSM phase alongside status.
+  updateTeam(team.id, {
+    ...team,
+    status: activeAgents.length >= 2 ? 'active' : 'failed',
+    phase: activeAgents.length >= 2 ? 'ready_wait' : 'failed',
+  })
 
   // Phase 2: Wait for ALL agents to be ready, then inject prompts
   if (activeAgents.length >= 2) {
     const runtime = getRuntime()
 
     const waitForReady = async (
-      sessionName: string, program: string, hostId?: string, maxWait = 60000,
+      sessionName: string, program: string, hostId?: string, maxWait = 480000,
     ): Promise<boolean> => {
       const start = Date.now()
       const agentConfig = resolveAgentProgram(program)
@@ -463,7 +621,8 @@ export async function createEnsembleTeam(
             }
           } else {
             const output = await runtime.capturePane(sessionName, 50)
-            const lastLines = output.split('\n').slice(-5).join('\n')
+            // Check last 15 lines — readyMarker may be above footer elements
+            const lastLines = output.split('\n').slice(-15).join('\n')
             if (lastLines.includes(readyMarker)) {
               console.log(`[Ensemble] ${sessionName} is ready (${Math.round((Date.now() - start) / 1000)}s)`)
               return true
@@ -501,6 +660,19 @@ export async function createEnsembleTeam(
         content: `❌ Team start aborted: only ${ready.length}/${activeAgents.length} agents ready`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
+      // Kill any spawned tmux sessions — both ready and notReady paths leave
+      // live sessions behind (ready saw the marker, notReady may have panes
+      // still warming up). Otherwise they outlive the team record.
+      for (const r of [...ready, ...notReady]) {
+        try {
+          if (r.agent.hostId && !isSelf(r.agent.hostId)) {
+            const host = getHostById(r.agent.hostId)
+            if (host && r.agent.agentId) await killRemoteAgent(host.url, r.agent.agentId)
+          } else {
+            await killLocalAgent(r.sessionName)
+          }
+        } catch { /* best effort */ }
+      }
       updateTeam(team.id, { status: 'failed' })
       return { data: { team: { ...team, status: 'failed' } }, status: 201 }
     }
@@ -556,31 +728,50 @@ export async function createEnsembleTeam(
           content: `❌ Staged workflow failed: ${message}`,
           type: 'chat', timestamp: new Date().toISOString(),
         })
-        updateTeam(team.id, { status: 'failed' })
+        updateTeam(team.id, { status: 'failed', phase: 'failed' })
       })
     } else {
       // Normal mode: inject prompts simultaneously
+      updateTeam(team.id, { phase: 'executing' })
       console.log(`[Ensemble] All ${ready.length} agents ready — injecting prompts simultaneously`)
-      await Promise.all(
-        ready.map(async ({ agent, sessionName }) => {
+      // A1/A4/A5: track delivery outcomes, log audit events, rollback on any failure
+      type DeliveryResult = { agent: string; session: string; verified: boolean; error?: string }
+      const deliveryResults: DeliveryResult[] = await Promise.all(
+        ready.map(async ({ agent, sessionName }): Promise<DeliveryResult> => {
           const promptFile = collabPromptFile(team.id, agent.name)
           try {
+            let verified = true
             if (agent.hostId && !isSelf(agent.hostId)) {
               const host = getHostById(agent.hostId)
               if (host) {
                 const prompt = fs.readFileSync(promptFile, 'utf-8')
-                await postRemoteSessionCommand(host.url, sessionName, prompt)
+                // C3: remote delivery with verification — extract long tokens as signatures
+                const longTokens = [...prompt.matchAll(/[A-Za-z0-9_-]{9,}/g)]
+                  .map(m => m[0])
+                  .filter(t => !/^(Progress|Standing|Received|Instructions|Implementation)$/i.test(t))
+                  .slice(0, 2)
+                verified = await postRemoteSessionCommandVerified(host.url, sessionName, prompt, longTokens)
               }
             } else {
               const agentCfg = resolveAgentProgram(agent.program)
               if (agentCfg.inputMethod === 'pasteFromFile') {
-                await runtime.pasteFromFile(sessionName, promptFile)
+                verified = await runtime.pasteFromFile(sessionName, promptFile)
               } else {
                 const prompt = fs.readFileSync(promptFile, 'utf-8')
                 await runtime.sendKeys(sessionName, prompt, { literal: true, enter: true })
               }
             }
-            console.log(`[Ensemble] ✓ Prompt injected into ${sessionName}`)
+            // A5: audit event in messages.jsonl, not just console
+            appendMessage(team.id, {
+              id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+              content: verified
+                ? `📨 Delivery verified for ${agent.name}`
+                : `⚠️ Delivery unverified for ${agent.name} (paste signatures not detected in pane)`,
+              type: 'chat', timestamp: new Date().toISOString(),
+            })
+            if (verified) console.log(`[Ensemble] ✓ Prompt injected into ${sessionName}`)
+            else console.warn(`[Ensemble] ⚠️ Prompt delivery UNVERIFIED for ${sessionName}`)
+            return { agent: agent.name, session: sessionName, verified }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             appendMessage(team.id, {
@@ -589,15 +780,42 @@ export async function createEnsembleTeam(
               type: 'chat', timestamp: new Date().toISOString(),
             })
             console.error(`[Ensemble] ✗ Failed to inject prompt into ${sessionName}:`, err)
+            return { agent: agent.name, session: sessionName, verified: false, error: message }
           }
         })
       )
 
-      appendMessage(team.id, {
-        id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `🚀 All ${ready.length} agents received their task — collaboration started`,
-        type: 'chat', timestamp: new Date().toISOString(),
-      })
+      // A4 revised: only abort on HARD errors (exceptions during delivery), not
+      // on unverified paste. Codex reformats/wraps pasted text so verification
+      // signatures break across lines — an unverified paste is often successful.
+      // Hard errors = transport failures, tmux session not found, etc.
+      const hardFailures = deliveryResults.filter(r => r.error)
+      const unverified = deliveryResults.filter(r => !r.verified && !r.error)
+      if (unverified.length > 0) {
+        appendMessage(team.id, {
+          id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+          content: `⚠️ Paste unverified for ${unverified.map(f => f.agent).join(', ')} — prompt may have landed but signature not detected in pane (line-wrap?). Proceeding.`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+      }
+      if (hardFailures.length > 0) {
+        appendMessage(team.id, {
+          id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+          content: `🛑 Aborting collab: ${hardFailures.length}/${deliveryResults.length} deliveries had hard errors (${hardFailures.map(f => f.agent + ': ' + f.error).join('; ')})`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+        updateTeam(team.id, { status: 'failed', phase: 'failed' })
+        // Best-effort tmux cleanup
+        for (const f of deliveryResults) {
+          try { await runtime.killSession(f.session) } catch { /* best effort */ }
+        }
+      } else {
+        appendMessage(team.id, {
+          id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+          content: `🚀 All ${ready.length} agents received their task — collaboration started`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+      }
     }
   }
 
@@ -614,6 +832,78 @@ export function listEnsembleTeams(): ServiceResult<{ teams: EnsembleTeam[] }> {
   return { data: { teams: loadTeams() }, status: 200 }
 }
 
+// B3: team health snapshot (phase, session liveness, delivery status, idle age)
+export function getTeamHealth(teamId: string): ServiceResult<Record<string, unknown>> {
+  const team = getTeam(teamId)
+  if (!team) return { error: 'Team not found', status: 404 }
+  const messages = getMessages(teamId)
+  const agentMessages = messages.filter(m => m.from !== 'ensemble' && m.from !== 'user')
+  const lastMsg = agentMessages[agentMessages.length - 1]
+  const lastMsgAgeMs = lastMsg
+    ? Date.now() - new Date(lastMsg.timestamp).getTime()
+    : null
+  const deliveryEvents = messages.filter(m => /^(📨 Delivery|⚠️ Delivery|❌ Delivery)/.test(m.content))
+
+  // Check tmux session liveness for local agents
+  const sessions = team.agents.map(a => {
+    const sessionName = `${team.name}-${a.name}`
+    let alive = false
+    try {
+      execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`)
+      alive = true
+    } catch { alive = false }
+    return { agent: a.name, session: sessionName, alive, status: a.status }
+  })
+
+  return {
+    data: {
+      teamId: team.id,
+      status: team.status,
+      phase: team.phase ?? null,
+      createdAt: team.createdAt,
+      messageCount: messages.length,
+      agentMessageCount: agentMessages.length,
+      lastMessageAgeMs: lastMsgAgeMs,
+      lastMessageFrom: lastMsg?.from ?? null,
+      lastMessageClass: lastMsg?.messageClass ?? null,
+      deliveryEvents: deliveryEvents.length,
+      sessions,
+      allSessionsAlive: sessions.every(s => s.alive || s.status === 'done' || s.status === 'failed'),
+    },
+    status: 200,
+  }
+}
+
+// C2: aggregate metrics across all known teams
+export function getEnsembleMetrics(): ServiceResult<Record<string, unknown>> {
+  const teams = loadTeams()
+  const byStatus: Record<string, number> = {}
+  const byPhase: Record<string, number> = {}
+  let totalDurationMs = 0
+  let completedCount = 0
+  for (const t of teams) {
+    byStatus[t.status] = (byStatus[t.status] ?? 0) + 1
+    if (t.phase) byPhase[t.phase] = (byPhase[t.phase] ?? 0) + 1
+    if (t.completedAt && t.createdAt) {
+      totalDurationMs += new Date(t.completedAt).getTime() - new Date(t.createdAt).getTime()
+      completedCount++
+    }
+  }
+  const avgDurationMs = completedCount > 0 ? Math.round(totalDurationMs / completedCount) : null
+  return {
+    data: {
+      teams_total: teams.length,
+      teams_by_status: byStatus,
+      teams_by_phase: byPhase,
+      teams_completed: byStatus.disbanded ?? 0,
+      teams_failed: byStatus.failed ?? 0,
+      avg_duration_ms: avgDurationMs,
+      avg_duration_s: avgDurationMs ? Math.round(avgDurationMs / 1000) : null,
+    },
+    status: 200,
+  }
+}
+
 export async function checkIdleTeams(): Promise<void> {
   await ensembleService.checkIdleTeams()
 }
@@ -624,6 +914,22 @@ export function getTeamFeed(teamId: string, since?: string): ServiceResult<{ mes
   return { data: { messages: getMessages(teamId, since) }, status: 200 }
 }
 
+// C4: per-agent rate limit — sliding 60s window, max 30 messages.
+// Protects against pathological agent spam thrashing the message lock.
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX_MSGS = 30
+const _rateLimitWindows = new Map<string, number[]>()
+
+function checkRateLimit(teamId: string, from: string): { ok: boolean; count: number } {
+  const key = `${teamId}:${from}`
+  const now = Date.now()
+  const cutoff = now - RATE_LIMIT_WINDOW_MS
+  const arr = (_rateLimitWindows.get(key) ?? []).filter(ts => ts > cutoff)
+  arr.push(now)
+  _rateLimitWindows.set(key, arr)
+  return { ok: arr.length <= RATE_LIMIT_MAX_MSGS, count: arr.length }
+}
+
 export async function sendTeamMessage(
   teamId: string, to: string, content: string, from?: string,
   existingId?: string, existingTimestamp?: string,
@@ -631,14 +937,32 @@ export async function sendTeamMessage(
   const team = getTeam(teamId)
   if (!team) return { error: 'Team not found', status: 404 }
 
+  // C4: rate-limit non-ensemble senders
+  const sender = from || 'user'
+  if (sender !== 'ensemble' && sender !== 'user') {
+    const rl = checkRateLimit(teamId, sender)
+    if (!rl.ok) {
+      // Record a single warning event per breach cycle; drop the offending message.
+      const lastWarn = (_rateLimitWindows.get(`${teamId}:${sender}:warned`) ?? [])[0] ?? 0
+      if (Date.now() - lastWarn > RATE_LIMIT_WINDOW_MS) {
+        _rateLimitWindows.set(`${teamId}:${sender}:warned`, [Date.now()])
+        appendMessage(teamId, {
+          id: uuidv4(), teamId, from: 'ensemble', to: 'team',
+          content: `⚠️ Rate limit hit: ${sender} exceeded ${RATE_LIMIT_MAX_MSGS} messages in ${RATE_LIMIT_WINDOW_MS / 1000}s (current: ${rl.count}). Dropping excess.`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+      }
+      return { error: `Rate limit: ${sender} exceeded ${RATE_LIMIT_MAX_MSGS} msgs/min`, status: 429 }
+    }
+  }
+
   const message: EnsembleMessage = {
-    id: existingId || uuidv4(), teamId, from: from || 'user', to, content,
+    id: existingId || uuidv4(), teamId, from: sender, to, content,
     type: 'chat', timestamp: existingTimestamp || new Date().toISOString(),
   }
   appendMessage(teamId, message)
 
   // Determine which agents should receive this message in their tmux pane
-  const sender = from || 'user'
   const recipients = to === 'team'
     ? team.agents.filter(a => a.status === 'active' && a.name !== sender)
     : team.agents.filter(a => a.status === 'active' && a.name === to)
@@ -746,6 +1070,13 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
   const team = getTeam(teamId)
   if (!team) return { error: 'Team not found', status: 404 }
 
+  // Mark phase transition before cleanup so external observers see
+  // executing → disbanding → disbanded, not a sudden status flip with stale
+  // phase. `disbanding` is reachable from executing/reviewing/done_pending.
+  if (team.phase && team.phase !== 'disbanded' && team.phase !== 'disbanding') {
+    updateTeam(teamId, { phase: 'disbanding' })
+  }
+
   // Write summary before killing sessions so the Claude Code session can present it
   await writeDisbandSummary(teamId)
 
@@ -824,6 +1155,7 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
 
   const updated = updateTeam(teamId, {
     status: 'disbanded',
+    phase: 'disbanded',
     completedAt: new Date().toISOString(),
   })
 

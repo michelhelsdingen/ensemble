@@ -99,19 +99,28 @@ fi
 "$SCRIPT_DIR/collab-cleanup.sh" --force > /dev/null 2>&1 &
 
 # ─── 1c. Check for resumable active team on same CWD ───
-ACTIVE_TEAM=$(curl -sf "$API/api/ensemble/teams" 2>/dev/null | python3 -c "
+# Fetch id AND name: tmux sessions are named ${team.name}-${agent.name}, never
+# the UUID. Matching on team.id wrongly reports SESSIONS_ALIVE=0 and kills
+# live collabs.
+ACTIVE_INFO=$(curl -sf "$API/api/ensemble/teams" 2>/dev/null | python3 -c "
 import json, sys, os
 cwd = os.path.realpath('$CWD')
 teams = json.load(sys.stdin).get('teams', [])
 active = [t for t in teams if t.get('status') == 'active' and t.get('workingDirectory') == cwd]
 if active:
     active.sort(key=lambda t: t.get('createdAt', ''), reverse=True)
-    print(active[0]['id'])
+    print(active[0]['id'] + '\t' + active[0].get('name', ''))
 " 2>/dev/null || true)
+ACTIVE_TEAM="${ACTIVE_INFO%%$'\t'*}"
+ACTIVE_NAME=""
+[ "$ACTIVE_INFO" != "$ACTIVE_TEAM" ] && ACTIVE_NAME="${ACTIVE_INFO#*$'\t'}"
 
 if [ -n "$ACTIVE_TEAM" ]; then
-  # Only resume if tmux sessions for agents are still alive — otherwise team is orphaned
-  SESSIONS_ALIVE=$(tmux ls 2>/dev/null | grep -c "^${ACTIVE_TEAM}-\|-${ACTIVE_TEAM:0:8}-" || true)
+  SESSIONS_ALIVE=0
+  if [ -n "$ACTIVE_NAME" ]; then
+    SESSIONS_ALIVE=$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+      | awk -v n="$ACTIVE_NAME" '$0 ~ "^"n"-" {c++} END {print c+0}')
+  fi
   if [ "${SESSIONS_ALIVE:-0}" -gt 0 ]; then
     echo -e "  ${C}●${R} Active team found on same directory — resuming..."
     exec "$SCRIPT_DIR/collab-resume.sh" "$ACTIVE_TEAM"
@@ -162,10 +171,30 @@ if tmpl:
 json.dump(payload, open(os.environ['PFILE'], 'w'))
 "
 [ -n "$TEMPLATE_NAME" ] && echo -e "  ${D}Template: ${TEMPLATE_NAME}${R}"
-RESULT=$(curl -sf -X POST "$API/api/ensemble/teams" \
+# Capture status separately so a 409 CAS conflict (someone else created the
+# team for this cwd between step 1c and here) becomes a clean resume, not a
+# pipefail exit. The API response shape on 409 is { team: existingTeam, ... }.
+RESP_FILE=$(mktemp)
+HTTP_CODE=$(curl -sS -o "$RESP_FILE" -w '%{http_code}' -X POST "$API/api/ensemble/teams" \
   -H "Content-Type: application/json" \
-  -d @"$PAYLOAD_FILE")
+  -d @"$PAYLOAD_FILE" || echo "000")
 rm -f "$PAYLOAD_FILE"
+if [ "$HTTP_CODE" = "409" ]; then
+  EXIST_ID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['team']['id'])" "$RESP_FILE" 2>/dev/null || true)
+  rm -f "$RESP_FILE"
+  if [ -n "$EXIST_ID" ]; then
+    echo -e "  ${C}●${R} Concurrent launch claimed this cwd — resuming $EXIST_ID"
+    exec "$SCRIPT_DIR/collab-resume.sh" "$EXIST_ID"
+  fi
+  echo -e "  \033[91m✗${R} 409 conflict without existingTeam in body"; exit 1
+fi
+if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+  echo -e "  \033[91m✗${R} Team creation failed: HTTP $HTTP_CODE"
+  head -c 400 "$RESP_FILE" 2>/dev/null; echo
+  rm -f "$RESP_FILE"; exit 1
+fi
+RESULT=$(cat "$RESP_FILE")
+rm -f "$RESP_FILE"
 
 TEAM_ID=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['team']['id'])")
 RUNTIME_DIR="$(collab_runtime_dir "$TEAM_ID")"

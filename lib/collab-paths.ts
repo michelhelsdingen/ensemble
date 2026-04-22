@@ -49,10 +49,17 @@ export function collabPromptFile(teamId: string, agentName: string): string {
   return path.join(RUNTIME_ROOT, teamId, 'prompts', `${agentName}.txt`)
 }
 
-/** Per-session delivery file — unique per write to avoid race conditions between concurrent writers */
+// Fix 8: per-delivery file name is strictly monotonic + random.
+// The previous bare Math.random() could in rare cases collide (e.g. two
+// near-simultaneous watchdog nudges + staged deliveries to same session).
+// Monotonic counter + process-nanosecond timestamp + random tail guarantees
+// uniqueness and makes filenames sortable for debugging.
+let _deliverySeq = 0
 export function collabDeliveryFile(teamId: string, sessionName: string): string {
-  const suffix = Math.random().toString(36).slice(2, 10)
-  return path.join(RUNTIME_ROOT, teamId, 'delivery', `${sessionName}-${suffix}.txt`)
+  const seq = (++_deliverySeq).toString(36).padStart(4, '0')
+  const ts = process.hrtime.bigint().toString(36).slice(-10)
+  const rand = Math.random().toString(36).slice(2, 6)
+  return path.join(RUNTIME_ROOT, teamId, 'delivery', `${sessionName}-${ts}-${seq}-${rand}.txt`)
 }
 
 /** Bridge result file (raw bridge output) */

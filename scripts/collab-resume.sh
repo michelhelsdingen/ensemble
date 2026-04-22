@@ -31,10 +31,6 @@ if active:
   fi
 fi
 
-if [ -n "${TMUX:-}" ]; then
-  tmux rename-window "⏳ collab" 2>/dev/null || true
-fi
-
 echo -e "\n  ${BD}${W}◈ ensemble resume${R}"
 
 # ─── 2. Verify team exists and is active ───
@@ -92,7 +88,7 @@ echo -e "  ${CHECK} Messages so far: ${MSG_COUNT}"
 # ─── 6. Open monitor ───
 MONITOR_CMD="cd '$REPO_DIR' && ./node_modules/.bin/tsx cli/monitor.ts $TEAM_ID"
 if [ -n "${TMUX:-}" ]; then
-  SPAWN_PANE="${TMUX_PANE:-}"
+  SPAWN_PANE=$(tmux display-message -p '#{pane_id}' 2>/dev/null || echo "")
   if [ -n "$SPAWN_PANE" ]; then
     tmux split-window -h -t "$SPAWN_PANE" -l '40%' "$MONITOR_CMD"
   else

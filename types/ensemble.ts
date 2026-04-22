@@ -1,8 +1,24 @@
+// Fix 3: explicit FSM phase persisted on the team record. Previously phase
+// was only inferred from prose in messages, which made completion detection
+// fragile. Now the orchestrator owns the transitions.
+export type TeamPhase =
+  | 'forming'
+  | 'spawning'
+  | 'ready_wait'
+  | 'planning'
+  | 'executing'
+  | 'reviewing'
+  | 'done_pending'
+  | 'disbanding'
+  | 'disbanded'
+  | 'failed'
+
 export interface EnsembleTeam {
   id: string
   name: string
   description: string
   status: 'forming' | 'active' | 'paused' | 'completed' | 'disbanded' | 'failed'
+  phase?: TeamPhase
   agents: EnsembleTeamAgent[]
   createdBy: string
   createdAt: string
@@ -31,6 +47,9 @@ export interface EnsembleTeamResult {
   duration: number
 }
 
+// Fix 4/6: message class tag (parsed from [PLAN], [FINDING], etc. prefix)
+export type MessageClass = 'PLAN' | 'FINDING' | 'BLOCKER' | 'REVIEW' | 'PROGRESS' | 'DONE' | 'UNTAGGED'
+
 export interface EnsembleMessage {
   id: string
   teamId: string
@@ -40,6 +59,10 @@ export interface EnsembleMessage {
   type: 'chat' | 'decision' | 'question' | 'result'
   timestamp: string
   options?: string[]
+  // Fix 4: delivery tracking for paste acks and semantic filtering
+  deliveryId?: string
+  checksum?: string
+  messageClass?: MessageClass
 }
 
 export interface CreateTeamRequest {
@@ -56,6 +79,8 @@ export interface CreateTeamRequest {
   useWorktrees?: boolean
   staged?: boolean
   stagedConfig?: StagedWorkflowConfig
+  // Fix 2: CAS — set to true to bypass one-active-team-per-cwd check (e.g. worktree mode)
+  allowConcurrent?: boolean
 }
 
 export type StagedPhase = 'plan' | 'exec' | 'verify'
@@ -70,6 +95,7 @@ export interface StagedWorkflowConfig {
 export interface CollabTemplateRole {
   role: string
   focus: string
+  expert?: string  // slug from context-profiles/index.json (e.g. "howard-marks", "philip-tetlock")
 }
 
 export interface CollabTemplate {
