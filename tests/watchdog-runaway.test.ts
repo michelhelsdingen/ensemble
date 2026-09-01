@@ -80,6 +80,63 @@ function harness(agentNames: string[]) {
 }
 
 
+/**
+ * Builds a watchdog whose nudges SUCCEED and whose agent answers every one of
+ * them without making progress. That is the second runaway: the state resets on
+ * every incoming message, so the next silence looks like the first one.
+ */
+function answeringHarness(agentNames: string[], maxNudges?: number) {
+  const team = makeTeam(agentNames)
+  const messages: EnsembleMessage[] = []
+  let nudgesDelivered = 0
+  let now = 1_000_000
+
+  const watchdog = new AgentWatchdog({
+    loadTeams: () => [team],
+    getMessages: () => messages,
+    appendMessage: (_teamId, message) => { messages.push(message) },
+    getRuntime: () => ({
+      sendKeys: async () => { nudgesDelivered++ },
+      pasteFromFile: async () => { nudgesDelivered++ },
+    }),
+    resolveAgentProgram: () => ({ inputMethod: 'pasteFromFile' as const }),
+    isSelf: () => true,
+    getHostById: () => undefined,
+    postRemoteSessionCommand: async () => {},
+    collabDeliveryFile: (_teamId, sessionName) => `/tmp/ensemble-test/${sessionName}.txt`,
+    now: () => now,
+    nudgeAfterMs: 90_000,
+    stallAfterMs: 180_000,
+    pollIntervalMs: 1_000_000,
+    ...(maxNudges === undefined ? {} : { maxNudges }),
+  })
+
+  return {
+    watchdog,
+    messages,
+    delivered: () => nudgesDelivered,
+    /** One round = go quiet past the nudge threshold, get nudged, answer it. */
+    async roundTrips(rounds: number, agentName = agentNames[0]) {
+      for (let i = 0; i < rounds; i++) {
+        now += 100_000
+        await watchdog.poll()
+        now += 1_000
+        messages.push({
+          id: `reply-${i}`,
+          teamId: TEAM_ID,
+          from: agentName,
+          to: 'team',
+          content: 'still working on it',
+          type: 'chat',
+          timestamp: new Date(now).toISOString(),
+        } as EnsembleMessage)
+        await watchdog.poll()
+      }
+    },
+  }
+}
+
+
 describe('watchdog runaway', () => {
   
   it('stops nudging after the limit instead of retrying forever', async () => {
@@ -112,6 +169,47 @@ describe('watchdog runaway', () => {
     // 2 agents x 3 attempts, and only one team-level report once both are gone.
     assert.strictEqual(h.attempts(), 6, `expected 6 attempts, got ${h.attempts()}`)
     assert.strictEqual(h.unreachable.length, 1, `expected 1 report, got ${h.unreachable.length}`)
+    h.watchdog.stop()
+  })
+})
+
+describe('watchdog runaway on answered nudges', () => {
+
+  it('stops nudging an agent that answers every nudge without progress', async () => {
+    const h = answeringHarness(['claude-1'])
+    await h.roundTrips(25)
+    assert.ok(
+      h.delivered() <= 5,
+      `expected at most 5 nudges for an answering agent, got ${h.delivered()}`,
+    )
+    h.watchdog.stop()
+  })
+
+  it('says once in the feed that it stopped nudging', async () => {
+    const h = answeringHarness(['claude-1'])
+    await h.roundTrips(25)
+    const stopped = h.messages.filter(m => m.content.includes('stopped nudging'))
+    assert.strictEqual(stopped.length, 1, `expected 1 line, got ${stopped.length}`)
+    h.watchdog.stop()
+  })
+
+  it('counts the budget per agent, not per team', async () => {
+    const h = answeringHarness(['claude-1', 'codex-2'])
+    // Only claude-1 answers; codex-2 stays silent and follows the stall path.
+    await h.roundTrips(25, 'claude-1')
+    const stopped = h.messages.filter(m => m.content.includes('stopped nudging'))
+    assert.strictEqual(stopped.length, 1, `expected 1 line, got ${stopped.length}`)
+    assert.ok(
+      stopped[0].content.includes('claude-1'),
+      'only the answering agent should run out of budget',
+    )
+    h.watchdog.stop()
+  })
+
+  it('honours a configured budget', async () => {
+    const h = answeringHarness(['claude-1'], 2)
+    await h.roundTrips(25)
+    assert.strictEqual(h.delivered(), 2, `expected 2 nudges, got ${h.delivered()}`)
     h.watchdog.stop()
   })
 })

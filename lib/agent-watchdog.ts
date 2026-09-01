@@ -21,12 +21,27 @@ const WATCHDOG_NUDGE_TEXT = 'Are you still working? Share your progress with tea
  */
 const DEFAULT_MAX_FAILED_NUDGES = 3
 
+/**
+ * How many nudges an agent may receive in total before we leave it alone.
+ *
+ * The failed-nudge limit above only covers agents whose session is gone. An
+ * agent that is still there answers the nudge, which resets `lastMessageAt`, so
+ * the next silence looks like the first one and it gets nudged again. Measured
+ * on 2026-09-01: 1.434 nudges in August alone, 792 of them to a single session
+ * over one night. Every nudge is a full turn carrying the whole conversation.
+ */
+const DEFAULT_MAX_NUDGES = 5
+
 interface AgentWatchdogState {
   lastMessageAt: string
   nudgedAt?: string
   stalledAt?: string
   /** Consecutive failed nudge attempts; reset on success. */
   failedNudges?: number
+  /** Nudges delivered to this agent; survives incoming messages on purpose. */
+  nudgeCount?: number
+  /** Set once the nudge budget ran out, so we say it once and then stay quiet. */
+  nudgeBudgetSpentAt?: string
   /** Set once we gave up on this agent, so we stop retrying and stop logging. */
   unreachableAt?: string
 }
@@ -52,6 +67,7 @@ interface AgentWatchdogDeps {
   stallAfterMs?: number
   pollIntervalMs?: number
   maxFailedNudges?: number
+  maxNudges?: number
 }
 
 function parseDuration(rawValue: string | undefined, fallback: number): number {
@@ -67,6 +83,10 @@ export function getWatchdogStallMs(): number {
   return parseDuration(process.env.ENSEMBLE_WATCHDOG_STALL_MS, DEFAULT_STALL_MS)
 }
 
+export function getWatchdogMaxNudges(): number {
+  return parseDuration(process.env.ENSEMBLE_WATCHDOG_MAX_NUDGES, DEFAULT_MAX_NUDGES)
+}
+
 export class AgentWatchdog {
   private readonly state = new Map<string, AgentWatchdogState>()
   private readonly timer: NodeJS.Timeout
@@ -74,12 +94,14 @@ export class AgentWatchdog {
   private readonly nudgeAfterMs: number
   private readonly stallAfterMs: number
   private readonly maxFailedNudges: number
+  private readonly maxNudges: number
 
   constructor(private readonly deps: AgentWatchdogDeps) {
     this.now = deps.now ?? Date.now
     this.nudgeAfterMs = deps.nudgeAfterMs ?? getWatchdogNudgeMs()
     this.stallAfterMs = deps.stallAfterMs ?? getWatchdogStallMs()
     this.maxFailedNudges = deps.maxFailedNudges ?? DEFAULT_MAX_FAILED_NUDGES
+    this.maxNudges = deps.maxNudges ?? getWatchdogMaxNudges()
 
     this.timer = setInterval(() => {
       void this.poll()
@@ -126,7 +148,13 @@ export class AgentWatchdog {
       if (!previousState) {
         this.state.set(stateKey, { lastMessageAt })
       } else if (previousState.lastMessageAt !== lastMessageAt) {
-        this.state.set(stateKey, { lastMessageAt })
+        // Progress clears the stall tracking, but NOT the nudge budget: an agent
+        // that only ever answers the nudge itself would otherwise reset it too.
+        this.state.set(stateKey, {
+          lastMessageAt,
+          nudgeCount: previousState.nudgeCount,
+          nudgeBudgetSpentAt: previousState.nudgeBudgetSpentAt,
+        })
         continue
       }
 
@@ -141,11 +169,33 @@ export class AgentWatchdog {
       if (currentState.unreachableAt) continue
 
       if (!currentState.nudgedAt && idleMs >= this.nudgeAfterMs) {
+        const nudgeCount = currentState.nudgeCount ?? 0
+
+        if (nudgeCount >= this.maxNudges) {
+          if (!currentState.nudgeBudgetSpentAt) {
+            this.state.set(stateKey, {
+              ...currentState,
+              nudgeBudgetSpentAt: new Date(nowMs).toISOString(),
+            })
+            this.deps.appendMessage(team.id, {
+              id: uuidv4(),
+              teamId: team.id,
+              from: 'ensemble',
+              to: 'team',
+              content: `🔕 Watchdog stopped nudging ${agent.name} after ${nudgeCount} nudges without progress`,
+              type: 'chat',
+              timestamp: new Date(nowMs).toISOString(),
+            })
+          }
+          continue
+        }
+
         try {
           await this.nudgeAgent(team, agent.name, agent.program, agent.hostId)
           this.state.set(stateKey, {
             lastMessageAt,
             nudgedAt: new Date(nowMs).toISOString(),
+            nudgeCount: nudgeCount + 1,
           })
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
@@ -263,5 +313,6 @@ export {
   DEFAULT_NUDGE_MS,
   DEFAULT_STALL_MS,
   DEFAULT_MAX_FAILED_NUDGES,
+  DEFAULT_MAX_NUDGES,
   WATCHDOG_NUDGE_TEXT,
 }
