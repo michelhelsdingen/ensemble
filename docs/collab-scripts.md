@@ -196,12 +196,18 @@ Shows: team name, status (active/finished/stale), message count, last message, d
 
 ## collab-cleanup.sh
 
-**Remove finished team runtime directories** from `/tmp/ensemble/`. Dry-run by default.
+**Remove finished and abandoned team runtime directories** from `/tmp/ensemble/`. Dry-run by default.
 
 ```bash
 ./scripts/collab-cleanup.sh           # list what would be deleted
 ./scripts/collab-cleanup.sh --force   # actually delete
 ```
+
+Finished directories (with a `.finished` marker) are removed after 24h, the latest
+three are always kept. Abandoned directories, without a marker and without a single
+message (a launch that died before the agents spoke, a stray lock directory), are
+removed after 24h as well. A directory that holds messages is never touched: the
+team may still be running, and `collab-history.py` reads those messages later.
 
 This does not disband a running team. To end one, press `d` in the monitor or
 `POST /api/ensemble/teams/<id>/disband`.

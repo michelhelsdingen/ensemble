@@ -529,7 +529,9 @@ describe('team-say — output format', () => {
   })
 
   afterEach(() => {
-    if (fs.existsSync(outputFile)) fs.rmSync(outputFile, { force: true })
+    // Remove the whole directory: team-say.sh also leaves a lock file, and a
+    // directory with only that lock stayed behind in /tmp/ensemble per test run.
+    fs.rmSync(path.dirname(outputFile), { recursive: true, force: true })
   })
 
   it('prints "Sent to <recipient>" on stdout', () => {

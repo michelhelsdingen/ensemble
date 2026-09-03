@@ -34,6 +34,8 @@ npm install
 
 # Start the server (keep this running)
 npm run dev
+# ...or on macOS, once, to keep it running across reboots:
+./scripts/install-launchd.sh
 ```
 
 ### Verify (in a second terminal)
