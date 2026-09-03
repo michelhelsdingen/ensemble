@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# collab-cleanup.sh — Clean up old finished collab runtime directories.
+# collab-cleanup.sh — Clean up old finished and abandoned collab runtime directories.
 # Usage: collab-cleanup.sh [--force]
+#
+# Finished: has a .finished marker (written on disband). The latest 3 and anything
+# under 24h are kept. Abandoned: no marker and never a message (a launch that
+# died before the agents spoke, or a stray lock directory); removed after 24h.
+# COLLAB_RUNTIME_ROOT overrides the root, for tests.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./collab-paths.sh
 source "$SCRIPT_DIR/collab-paths.sh"
 
-ENSEMBLE_ROOT="/tmp/ensemble"
+ENSEMBLE_ROOT="${COLLAB_RUNTIME_ROOT:-/tmp/ensemble}"
 KEEP_RECENT=3
 MIN_AGE_SECONDS=$((24 * 60 * 60))
 MODE="dry-run"
@@ -55,6 +60,29 @@ finished_entries() {
     done | sort -rn
 }
 
+# Newest mtime of a directory and everything in it.
+newest_mtime() {
+  local dir="${1:?dir required}" newest=0 ts
+  while IFS= read -r -d '' entry; do
+    ts="$(mtime_epoch "$entry")"
+    [ "$ts" -gt "$newest" ] && newest="$ts"
+  done < <(find "$dir" -print0)
+  printf '%s\n' "$newest"
+}
+
+# Directories without a .finished marker that never held a message. A team that
+# spoke keeps its directory whatever its state: it may still be running, and its
+# messages are what collab-history.py reads later.
+abandoned_entries() {
+  [ -d "$ENSEMBLE_ROOT" ] || return 0
+  find "$ENSEMBLE_ROOT" -mindepth 1 -maxdepth 1 -type d -print0 |
+    while IFS= read -r -d '' runtime_dir; do
+      [ -f "$runtime_dir/.finished" ] && continue
+      [ -s "$runtime_dir/messages.jsonl" ] && continue
+      printf '%s\t%s\n' "$(newest_mtime "$runtime_dir")" "$runtime_dir"
+    done | sort -rn
+}
+
 for arg in "$@"; do
   case "$arg" in
     --force)
@@ -78,7 +106,15 @@ while IFS= read -r line; do
   ENTRIES+=("$line")
 done < <(finished_entries)
 
+ABANDONED=()
+while IFS= read -r line; do
+  ABANDONED+=("$line")
+done < <(abandoned_entries)
+
 TOTAL_FINISHED="${#ENTRIES[@]}"
+TOTAL_ABANDONED="${#ABANDONED[@]}"
+ABANDONED_ELIGIBLE=0
+ABANDONED_REMOVED=0
 PRESERVED_RECENT=0
 PRESERVED_FRESH=0
 ELIGIBLE=0
@@ -98,12 +134,13 @@ if [ ! -d "$ENSEMBLE_ROOT" ]; then
   exit 0
 fi
 
-if [ "$TOTAL_FINISHED" -eq 0 ]; then
-  echo -e "  ${Y}No finished collabs found.${R}"
+if [ "$TOTAL_FINISHED" -eq 0 ] && [ "$TOTAL_ABANDONED" -eq 0 ]; then
+  echo -e "  ${Y}No finished or abandoned collabs found.${R}"
   exit 0
 fi
 
-for idx in "${!ENTRIES[@]}"; do
+# ${ARR[@]+"${ARR[@]}"} keeps set -u happy on an empty array under macOS bash 3.2.
+for idx in ${ENTRIES[@]+"${!ENTRIES[@]}"}; do
   entry="${ENTRIES[$idx]}"
   finished_ts="${entry%%$'\t'*}"
   runtime_dir="${entry#*$'\t'}"
@@ -142,18 +179,45 @@ for idx in "${!ENTRIES[@]}"; do
   fi
 done
 
+for entry in ${ABANDONED[@]+"${ABANDONED[@]}"}; do
+  newest_ts="${entry%%$'\t'*}"
+  runtime_dir="${entry#*$'\t'}"
+  runtime_name="$(basename "$runtime_dir")"
+  age_seconds=$((NOW - newest_ts))
+  age_hours=$((age_seconds / 3600))
+
+  if [ "$age_seconds" -lt "$MIN_AGE_SECONDS" ]; then
+    echo -e "  ${C}skip${R}    ${runtime_name} ${D}(no messages yet, ${age_hours}h old, may still be starting)${R}"
+    continue
+  fi
+
+  ABANDONED_ELIGIBLE=$((ABANDONED_ELIGIBLE + 1))
+  if [ "$MODE" = "force" ]; then
+    if rm -rf "$runtime_dir"; then
+      ABANDONED_REMOVED=$((ABANDONED_REMOVED + 1))
+      echo -e "  ${G}remove${R}  ${runtime_name} ${D}(abandoned, never a message, ${age_hours}h old)${R}"
+    else
+      FAILED=$((FAILED + 1))
+      echo -e "  ${Y}failed${R}  ${runtime_name} ${D}(abandoned, ${age_hours}h old)${R}"
+    fi
+  else
+    echo -e "  ${Y}would rm${R} ${runtime_name} ${D}(abandoned, never a message, ${age_hours}h old)${R}"
+  fi
+done
+
 echo ""
 echo -e "  ${BD}Stats${R}"
 echo -e "  finished dirs:      ${TOTAL_FINISHED}"
 echo -e "  kept (latest 3):    ${PRESERVED_RECENT}"
 echo -e "  kept (<24h):        ${PRESERVED_FRESH}"
 echo -e "  eligible old dirs:  ${ELIGIBLE}"
+echo -e "  abandoned dirs:     ${TOTAL_ABANDONED} (${ABANDONED_ELIGIBLE} older than 24h)"
 if [ "$MODE" = "force" ]; then
-  echo -e "  removed dirs:       ${REMOVED}"
+  echo -e "  removed dirs:       ${REMOVED} finished, ${ABANDONED_REMOVED} abandoned"
   echo -e "  failed removals:    ${FAILED}"
   echo -e "  reclaimed:          $(human_kb "$REMOVED_KB")"
 else
-  echo -e "  would remove:       ${ELIGIBLE}"
+  echo -e "  would remove:       ${ELIGIBLE} finished, ${ABANDONED_ELIGIBLE} abandoned"
   echo -e "  reclaimable:        $(human_kb "$REMOVED_KB")"
 fi
 echo -e "  finished footprint: $(human_kb "$TOTAL_KB")"

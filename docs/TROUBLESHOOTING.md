@@ -21,6 +21,15 @@ cd ~/Documents/ensemble && nohup ./node_modules/.bin/tsx server.ts > /tmp/ensemb
 Then re-run `/collab` from the same shell where `claude --print "ok"` and
 `codex login status` both succeed.
 
+On macOS you can hand the service to launchd instead, once:
+```bash
+./scripts/install-launchd.sh
+```
+It then starts at login, comes back after a crash, and restarts on demand with
+`launchctl kickstart -k gui/$(id -u)/dev.ensemble.server`. The agent carries the
+PATH of the shell that installed it, so install from a shell where the agent CLIs
+work. When preflight finds the service older than 24h it does the kickstart itself.
+
 ### Why the preflight catches it
 `scripts/collab-preflight.sh` runs before every team spawn, and checks only the CLIs the run
 actually needs (`collab-preflight.sh codex,claude,grok`, or `COLLAB_AGENTS`):

@@ -92,11 +92,32 @@ if [ -n "$SERVER_PID" ]; then
   if [ -n "$AGE_SECS" ]; then
     AGE_HRS=$((AGE_SECS / 3600))
     if [ "$AGE_HRS" -gt "$SERVICE_MAX_AGE_HOURS" ]; then
-      fail 2 "Ensemble service is ${AGE_HRS}h old (>${SERVICE_MAX_AGE_HOURS}h threshold)
+      # Under launchd (scripts/install-launchd.sh) a stale service is a restart
+      # away, so do that here instead of sending the user to a shell one-liner.
+      LAUNCHD_LABEL="${ENSEMBLE_LAUNCHD_LABEL:-dev.ensemble.server}"
+      LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
+      if command -v launchctl > /dev/null 2>&1 && launchctl print "$LAUNCHD_TARGET" > /dev/null 2>&1; then
+        warn "Ensemble service is ${AGE_HRS}h old — restarting it through launchd ($LAUNCHD_LABEL)"
+        launchctl kickstart -k "$LAUNCHD_TARGET"
+        RESTARTED=0
+        for _ in $(seq 1 10); do
+          sleep 1
+          if curl -sf "$API/api/v1/health" > /dev/null 2>&1; then RESTARTED=1; break; fi
+        done
+        if [ "$RESTARTED" = 1 ]; then
+          ok "Ensemble service restarted (fresh process under launchd)"
+        else
+          fail 2 "Ensemble service did not come back within 10s after launchctl kickstart; check /tmp/ensemble-server.log"
+        fi
+      else
+        fail 2 "Ensemble service is ${AGE_HRS}h old (>${SERVICE_MAX_AGE_HOURS}h threshold)
      This is the 2026-05-08 stale-state issue: agents will spawn with broken auth.
-     Fix: pkill -f 'tsx server.ts' && cd ~/Documents/ensemble && nohup ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &"
+     Fix: pkill -f 'tsx server.ts' && cd ~/Documents/ensemble && nohup ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &
+     Or install the launchd agent once (scripts/install-launchd.sh) and preflight restarts it for you."
+      fi
+    else
+      ok "Ensemble service age: ${AGE_HRS}h (within ${SERVICE_MAX_AGE_HOURS}h limit)"
     fi
-    ok "Ensemble service age: ${AGE_HRS}h (within ${SERVICE_MAX_AGE_HOURS}h limit)"
   else
     warn "Could not determine service age (no usable ps) — stale-service check skipped"
   fi

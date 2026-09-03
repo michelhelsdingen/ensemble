@@ -65,7 +65,8 @@ ensemble/
 │   ├── collab-livefeed.sh     # Continuous live feed
 │   ├── collab-status.sh       # Multi-team dashboard
 │   ├── collab-replay.sh       # Session replay
-│   ├── collab-cleanup.sh      # Temp file cleanup
+│   ├── collab-cleanup.sh      # Finished + abandoned runtime dir cleanup
+│   ├── install-launchd.sh     # macOS launchd agent for the server
 │   ├── team-say.sh            # Agent message send
 │   ├── team-read.sh           # Agent message read
 │   ├── ensemble-bridge.sh    # File→HTTP message bridge
