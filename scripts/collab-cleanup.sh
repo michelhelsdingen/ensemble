@@ -139,7 +139,8 @@ if [ "$TOTAL_FINISHED" -eq 0 ] && [ "$TOTAL_ABANDONED" -eq 0 ]; then
   exit 0
 fi
 
-for idx in "${!ENTRIES[@]}"; do
+# ${ARR[@]+"${ARR[@]}"} keeps set -u happy on an empty array under macOS bash 3.2.
+for idx in ${ENTRIES[@]+"${!ENTRIES[@]}"}; do
   entry="${ENTRIES[$idx]}"
   finished_ts="${entry%%$'\t'*}"
   runtime_dir="${entry#*$'\t'}"
@@ -178,7 +179,7 @@ for idx in "${!ENTRIES[@]}"; do
   fi
 done
 
-for entry in "${ABANDONED[@]}"; do
+for entry in ${ABANDONED[@]+"${ABANDONED[@]}"}; do
   newest_ts="${entry%%$'\t'*}"
   runtime_dir="${entry#*$'\t'}"
   runtime_name="$(basename "$runtime_dir")"

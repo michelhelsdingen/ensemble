@@ -14,7 +14,8 @@ const REPO = process.cwd()
 const INSTALL = path.join(REPO, 'scripts/install-launchd.sh')
 const LABEL = 'dev.ensemble.server'
 
-describe('install-launchd.sh', () => {
+// launchd and plutil exist on macOS only; the script refuses elsewhere by design.
+describe.skipIf(process.platform !== 'darwin')('install-launchd.sh', () => {
   let home: string
   let plist: string
 

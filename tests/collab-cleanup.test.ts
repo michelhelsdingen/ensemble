@@ -76,6 +76,18 @@ describe('collab-cleanup.sh abandoned directories', () => {
     expect(fs.existsSync(dir)).toBe(true)
   })
 
+  it('finishes with stats when there is nothing abandoned (empty array, bash 3.2)', () => {
+    makeDir(root, 'done', { 'messages.jsonl': '{}\n', '.finished': 't' }, true)
+    const out = run(root, '--force')
+    expect(out).toContain('Stats')
+  })
+
+  it('finishes with stats when there is nothing finished', () => {
+    makeDir(root, 'never-started', { 'prompts/codex-1.txt': 'x' }, true)
+    const out = run(root, '--force')
+    expect(out).toContain('Stats')
+  })
+
   it('only reports in dry-run mode', () => {
     const dir = makeDir(root, 'never-started', { 'prompts/codex-1.txt': 'x' }, true)
     const out = run(root)
