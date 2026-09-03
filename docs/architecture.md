@@ -61,6 +61,7 @@ ensemble/
 ├── scripts/
 │   ├── collab-launch.sh       # All-in-one team launcher
 │   ├── collab-poll.sh         # Single-shot message poller
+│   ├── collab-poller.sh       # Per-team feed loop, stops with its team
 │   ├── collab-livefeed.sh     # Continuous live feed
 │   ├── collab-status.sh       # Multi-team dashboard
 │   ├── collab-replay.sh       # Session replay

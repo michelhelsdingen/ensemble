@@ -23,7 +23,7 @@ import { exportObservation, checkMemoryEndpoint } from '../lib/memory-export'
 import { AgentWatchdog } from '../lib/agent-watchdog'
 import {
   collabPromptFile, collabDeliveryFile, collabSummaryFile, collabMessagesFile,
-  collabRuntimeDir, collabFinishedMarker, collabBridgePosted,
+  collabRuntimeDir, collabFinishedMarker, collabBridgePosted, collabPollerPid,
   collabBridgeResult, ensureCollabDirs,
 } from '../lib/collab-paths'
 import fs from 'fs'
@@ -1141,6 +1141,17 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
 
   // Soft cleanup: remove ephemeral files, keep messages/summary/log, write .finished marker
   try {
+    // The feed poller started by collab-launch.sh also stops on the .finished
+    // marker, but only on its next tick; kill it here so a disband never leaves
+    // a loop behind (on 2026-09-01 sixteen of them had outlived their teams).
+    const pollerPidFile = collabPollerPid(teamId)
+    if (fs.existsSync(pollerPidFile)) {
+      const pollerPid = parseInt(fs.readFileSync(pollerPidFile, 'utf8').trim(), 10)
+      if (pollerPid > 0) {
+        try { process.kill(pollerPid, 'SIGTERM') } catch { /* already gone */ }
+      }
+      fs.unlinkSync(pollerPidFile)
+    }
     const deliveryDir = path.join(collabRuntimeDir(teamId), 'delivery')
     if (fs.existsSync(deliveryDir)) fs.rmSync(deliveryDir, { recursive: true, force: true })
     for (const f of [collabBridgeResult(teamId), collabBridgePosted(teamId)]) {
