@@ -274,15 +274,56 @@ if wants grok; then
     fail 6 "grok binary not in PATH
      Fix: install the Grok CLI (https://x.ai) or check PATH"
   fi
-  GROK_AUTH=$(timeout 20 grok models 2>&1 | head -1)
-  if echo "$GROK_AUTH" | grep -qiE "logged in"; then
-    ok "Grok authenticated: ${GROK_AUTH:0:60}"
-    GROK_DEAD=0
-  else
-    warn "Grok not authenticated. Status: ${GROK_AUTH:0:80}"
-    warn "  Fix: grok login"
-    GROK_DEAD=1
+  # Classify the CLI's answer. Reads the WHOLE output, not just the first line:
+  # grok prints update banners above its status line, and a `head -1` grep then
+  # reports a perfectly logged-in CLI as logged out. Out-of-credit is checked
+  # first because it needs a different fix than logging in (seen 2026-08-21:
+  # 402 Payment Required, and the CLI silently waits on an upgrade page).
+  grok_auth_state() {
+    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+      *"payment required"*|*402*|*"out of credit"*|*"credit limit"*|*"quota"*)
+        echo "no-credit" ;;
+      *"logged in"*)
+        echo "ok" ;;
+      *)
+        echo "logged-out" ;;
+    esac
+  }
+
+  GROK_RETRY_SECS="${COLLAB_GROK_RETRY_SECS:-30}"
+  GROK_AUTH=$(timeout 20 grok models 2>&1)
+  GROK_STATE=$(grok_auth_state "$GROK_AUTH")
+
+  # Logging in takes half a minute in another window. Rather than failing the
+  # whole run and making the caller start over, hand them that window once, but
+  # only when someone is actually watching the output.
+  if [ "$GROK_STATE" = "logged-out" ] && [ -t 1 ] && [ "$GROK_RETRY_SECS" -gt 0 ]; then
+    warn "Grok not logged in. Run 'grok login' in another window, checking again in ${GROK_RETRY_SECS}s"
+    sleep "$GROK_RETRY_SECS"
+    GROK_AUTH=$(timeout 20 grok models 2>&1)
+    GROK_STATE=$(grok_auth_state "$GROK_AUTH")
   fi
+
+  GROK_LINE=$(printf '%s' "$GROK_AUTH" | grep -iE "logged in|payment|credit|quota" | head -1)
+  [ -n "$GROK_LINE" ] || GROK_LINE=$(printf '%s' "$GROK_AUTH" | head -1)
+
+  case "$GROK_STATE" in
+    ok)
+      GROK_MODEL=$(printf '%s' "$GROK_AUTH" | grep -iE "^default model:" | head -1)
+      ok "Grok authenticated: ${GROK_LINE:0:60}${GROK_MODEL:+ (${GROK_MODEL})}"
+      GROK_DEAD=0
+      ;;
+    no-credit)
+      warn "Grok is logged in but out of credit: ${GROK_LINE:0:80}"
+      warn "  This is not an auth problem: the weekly allowance reset date decides, not 'grok login'."
+      GROK_DEAD=1
+      ;;
+    *)
+      warn "Grok not authenticated. Status: ${GROK_LINE:0:80}"
+      warn "  Fix: grok login"
+      GROK_DEAD=1
+      ;;
+  esac
 
   # The project-directory picker blocks the very first turn in a fresh pane.
   # It is a one-time hint in ~/.grok/config.toml; warn instead of failing, since
