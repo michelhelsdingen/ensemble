@@ -118,7 +118,6 @@ RUNTIME_DIR="$(collab_runtime_dir "$TEAM_ID")"
 MESSAGES_FILE="$(collab_messages_file "$TEAM_ID")"
 BRIDGE_PID_FILE="$(collab_bridge_pid "$TEAM_ID")"
 BRIDGE_LOG_FILE="$(collab_bridge_log "$TEAM_ID")"
-POLLER_PID_FILE="$(collab_poller_pid "$TEAM_ID")"
 FEED_FILE="$(collab_feed_file "$TEAM_ID")"
 TEAM_ID_FILE="$(collab_team_id_file "$TEAM_ID")"
 
@@ -231,21 +230,8 @@ else
   MONITOR_MODE="session"
 fi
 
-# ─── 5. Background poller ───
-nohup bash -c '
-TID="'"$TEAM_ID"'"
-MESSAGES_FILE="'"$MESSAGES_FILE"'"
-FEED_FILE="'"$FEED_FILE"'"
-S=0
-while true; do
-  M=$(wc -l < "$MESSAGES_FILE" 2>/dev/null | tr -d " "); [ -z "$M" ] && M=0
-  if [ "$M" -gt "$S" ]; then
-    tail -n +"$((S+1))" "$MESSAGES_FILE" >> "$FEED_FILE" 2>/dev/null
-    S=$M
-  fi
-  sleep 5
-done' > /dev/null 2>&1 &
-printf '%s\n' "$!" > "$POLLER_PID_FILE"
+# ─── 5. Background poller (writes its own PID file, stops when the team is over) ───
+nohup "$SCRIPT_DIR/collab-poller.sh" "$TEAM_ID" "$API" > /dev/null 2>&1 &
 
 # ─── 6. Wait for agents ───
 echo -ne "  ${SPIN} Agents spawning..."
