@@ -8,13 +8,57 @@
  * Phase 4 of the service-layer refactoring.
  */
 
-import { exec, execFile, execFileSync as nodeExecFileSync } from 'child_process'
+import { execFile, execFileSync as nodeExecFileSync } from 'child_process'
+import { randomUUID } from 'crypto'
 import { promisify } from 'util'
 
 import { isShellCommand } from './startup-gates'
 
-const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
+
+/**
+ * Escape an argument for tmux's own command parser.
+ * When tmux parses commands from argv, a trailing semicolon in an argument is
+ * treated as a command separator unless escaped as '\;'.
+ */
+export function escapeTmuxArg(arg: string): string {
+  return arg.endsWith(';') ? arg.slice(0, -1) + '\\;' : arg
+}
+
+/**
+ * Tokenize a non-literal key sequence for tmux send-keys.
+ * Supports alphanumeric key names, hyphens, spaces, and double-quoted strings
+ * (e.g. '"exit"' -> 'exit', 'exit Enter' -> ['exit', 'Enter']).
+ * Rejects unsafe characters and unbalanced quotes.
+ */
+export function parseKeyTokens(keys: string): string[] {
+  if (!/^[a-zA-Z0-9\-_ "]+$/.test(keys)) {
+    throw new Error(`Unsafe tmux key sequence rejected: ${keys.slice(0, 50)}`)
+  }
+  const tokens: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < keys.length; i++) {
+    const ch = keys[i]
+    if (ch === '"') {
+      inQuotes = !inQuotes
+    } else if (ch === ' ' && !inQuotes) {
+      if (current.length > 0) {
+        tokens.push(current)
+        current = ''
+      }
+    } else {
+      current += ch
+    }
+  }
+  if (inQuotes) {
+    throw new Error(`Unbalanced quotes in tmux key sequence: ${keys.slice(0, 50)}`)
+  }
+  if (current.length > 0) {
+    tokens.push(current)
+  }
+  return tokens
+}
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -96,7 +140,13 @@ export class TmuxRuntime implements AgentRuntime {
 
   async listSessions(): Promise<DiscoveredSession[]> {
     try {
-      const { stdout } = await execAsync('tmux list-sessions 2>/dev/null || echo ""')
+      let stdout = ''
+      try {
+        const res = await execFileAsync('tmux', ['list-sessions'])
+        stdout = res.stdout
+      } catch {
+        return []
+      }
       if (!stdout.trim()) return []
 
       const lines = stdout.trim().split('\n')
@@ -120,10 +170,10 @@ export class TmuxRuntime implements AgentRuntime {
         let workingDirectory = ''
         try {
           const sName = this.sanitizeName(name)
-          const { stdout: cwdOutput } = await execAsync(
-            `tmux display-message -t "${sName}" -p "#{pane_current_path}" 2>/dev/null || echo ""`
-          )
-          workingDirectory = cwdOutput.trim()
+          const cwdOutput = await execFileAsync('tmux', [
+            'display-message', '-t', sName, '-p', '#{pane_current_path}',
+          ])
+          workingDirectory = cwdOutput.stdout.trim()
         } catch {
           workingDirectory = ''
         }
@@ -147,7 +197,7 @@ export class TmuxRuntime implements AgentRuntime {
   async sessionExists(name: string): Promise<boolean> {
     try {
       const sName = this.sanitizeName(name)
-      await execAsync(`tmux has-session -t "${sName}" 2>/dev/null`)
+      await execFileAsync('tmux', ['has-session', '-t', sName])
       return true
     } catch {
       return false
@@ -157,9 +207,9 @@ export class TmuxRuntime implements AgentRuntime {
   async getWorkingDirectory(name: string): Promise<string> {
     try {
       const sName = this.sanitizeName(name)
-      const { stdout } = await execAsync(
-        `tmux display-message -t "${sName}" -p "#{pane_current_path}" 2>/dev/null || echo ""`
-      )
+      const { stdout } = await execFileAsync('tmux', [
+        'display-message', '-t', sName, '-p', '#{pane_current_path}',
+      ])
       return stdout.trim()
     } catch {
       return ''
@@ -169,9 +219,9 @@ export class TmuxRuntime implements AgentRuntime {
   async isInCopyMode(name: string): Promise<boolean> {
     try {
       const sName = this.sanitizeName(name)
-      const { stdout } = await execAsync(
-        `tmux display-message -t "${sName}" -p "#{pane_in_mode}"`
-      )
+      const { stdout } = await execFileAsync('tmux', [
+        'display-message', '-t', sName, '-p', '#{pane_in_mode}',
+      ])
       return stdout.trim() === '1'
     } catch {
       return false
@@ -183,7 +233,7 @@ export class TmuxRuntime implements AgentRuntime {
       const inCopyMode = await this.isInCopyMode(name)
       if (inCopyMode) {
         const sName = this.sanitizeName(name)
-        await execAsync(`tmux send-keys -t "${sName}" q`)
+        await execFileAsync('tmux', ['send-keys', '-t', sName, 'q'])
         await new Promise(resolve => setTimeout(resolve, 50))
       }
     } catch {
@@ -195,18 +245,18 @@ export class TmuxRuntime implements AgentRuntime {
 
   async createSession(name: string, cwd: string): Promise<void> {
     const sName = this.sanitizeName(name)
-    await execFileAsync('tmux', ['new-session', '-d', '-s', sName, '-c', cwd])
+    await execFileAsync('tmux', ['new-session', '-d', '-s', sName, '-c', escapeTmuxArg(cwd)])
   }
 
   async killSession(name: string): Promise<void> {
     const sName = this.sanitizeName(name)
-    await execAsync(`tmux kill-session -t "${sName}"`)
+    await execFileAsync('tmux', ['kill-session', '-t', sName])
   }
 
   async renameSession(oldName: string, newName: string): Promise<void> {
     const sOld = this.sanitizeName(oldName)
     const sNew = this.sanitizeName(newName)
-    await execAsync(`tmux rename-session -t "${sOld}" "${sNew}"`)
+    await execFileAsync('tmux', ['rename-session', '-t', sOld, sNew])
   }
 
   // -- I/O -----------------------------------------------------------------
@@ -221,24 +271,29 @@ export class TmuxRuntime implements AgentRuntime {
     if (agentInput) await this.assertAgentInForeground(name)
 
     if (literal) {
-      const escaped = keys.replace(/'/g, "'\\''")
+      const safeArg = escapeTmuxArg(keys)
+      const sendArgs = ['send-keys', '-t', sName, '-l']
+      if (keys.startsWith('-')) {
+        sendArgs.push('--')
+      }
+      sendArgs.push(safeArg)
       if (enter) {
-        await execAsync(
-          `tmux send-keys -t "${sName}" -l '${escaped}' \\; send-keys -t "${sName}" C-m`
-        )
+        await execFileAsync('tmux', [
+          ...sendArgs,
+          ';',
+          'send-keys', '-t', sName, 'C-m',
+        ])
       } else {
-        await execAsync(`tmux send-keys -t "${sName}" -l '${escaped}'`)
+        await execFileAsync('tmux', sendArgs)
       }
     } else {
-      // Non-literal: keys is a raw key sequence (e.g. "C-c", "exit Enter")
-      // Validate that keys only contain safe tmux key names (alphanumeric, hyphens, spaces)
-      if (!/^[a-zA-Z0-9\-_ "]+$/.test(keys)) {
-        throw new Error(`Unsafe tmux key sequence rejected: ${keys.slice(0, 50)}`)
-      }
+      const tokens = parseKeyTokens(keys)
+      const args = ['send-keys', '-t', sName, ...tokens]
       if (enter) {
-        await execAsync(`tmux send-keys -t "${sName}" ${keys} C-m`)
-      } else {
-        await execAsync(`tmux send-keys -t "${sName}" ${keys}`)
+        args.push('C-m')
+      }
+      if (tokens.length > 0 || enter) {
+        await execFileAsync('tmux', args)
       }
     }
   }
@@ -248,43 +303,43 @@ export class TmuxRuntime implements AgentRuntime {
    * More reliable than send-keys -l for TUI apps (e.g., Codex) that don't
    * handle literal key injection well. Sends Enter after pasting.
    *
-   * Robust against tmux buffer races: load + paste + delete are chained in
-   * ONE shell invocation via `&&` so the buffer can't be eaten by another
-   * tmux client between the two execAsync calls (which previously caused
-   * the recurring "no buffer orch-collab-…" delivery failures).
+   * Robust against tmux buffer races: load + paste are chained in
+   * ONE tmux command list so the buffer cannot be eaten by another
+   * tmux client between calls.
    *
    * Retries up to 3x with exponential backoff (200ms, 400ms) before giving
-   * up — covers transient tmux server load and the rare case where another
-   * tmux process flushes the buffer-stack between load and paste.
+   * up -- covers transient tmux server load and buffer-stack flushes.
    */
   async pasteFromFile(name: string, filePath: string): Promise<void> {
     const sName = this.sanitizeName(name)
     // Pasting is only ever used for agent input, never for shell commands.
     await this.assertAgentInForeground(name)
-    const bufName = `orch-${sName}`
-    const sPath = filePath.replace(/[^a-zA-Z0-9\-_./~ ]/g, '')
-
-    // Atomic chain: if load fails, paste/delete are short-circuited; if
-    // paste fails, we still attempt delete via the trailing `|| true` so
-    // we don't leak buffers between retry attempts.
-    const cmd = [
-      `tmux load-buffer -b "${bufName}" "${sPath}"`,
-      `tmux paste-buffer -b "${bufName}" -t "${sName}"`,
-      `tmux delete-buffer -b "${bufName}" 2>/dev/null || true`,
-    ].join(' && ')
+    const safePath = escapeTmuxArg(filePath)
+    const callId = randomUUID()
 
     let lastErr: unknown
     const attempts = 3
     let geplakt = false
     for (let attempt = 1; attempt <= attempts && !geplakt; attempt++) {
+      const bufName = `orch-${sName}-${callId}-${attempt}`
       try {
-        await execAsync(cmd, { shell: '/bin/bash' })
+        await execFileAsync('tmux', [
+          'load-buffer', '-b', bufName, '--', safePath,
+          ';',
+          'paste-buffer', '-b', bufName, '-t', sName,
+        ])
         geplakt = true
       } catch (err) {
         lastErr = err
         if (attempt < attempts) {
           // Exponential backoff: 200ms, 400ms.
           await new Promise(r => setTimeout(r, 200 * 2 ** (attempt - 1)))
+        }
+      } finally {
+        try {
+          await execFileAsync('tmux', ['delete-buffer', '-b', bufName])
+        } catch {
+          // Best-effort cleanup so we don't leak buffers between retry attempts
         }
       }
     }
@@ -303,7 +358,7 @@ export class TmuxRuntime implements AgentRuntime {
     for (const wacht of [0, 300]) {
       if (wacht) await new Promise(r => setTimeout(r, wacht))
       try {
-        await execAsync(`tmux send-keys -t "${sName}" Enter`)
+        await execFileAsync('tmux', ['send-keys', '-t', sName, 'Enter'])
       } catch (err) {
         console.error(`[runtime] Enter naar ${sName} mislukte:`, err)
       }
@@ -313,9 +368,9 @@ export class TmuxRuntime implements AgentRuntime {
   async getForegroundCommand(name: string): Promise<string> {
     try {
       const sName = this.sanitizeName(name)
-      const { stdout } = await execAsync(
-        `tmux display-message -t "${sName}" -p "#{pane_current_command}" 2>/dev/null || echo ""`
-      )
+      const { stdout } = await execFileAsync('tmux', [
+        'display-message', '-t', sName, '-p', '#{pane_current_command}',
+      ])
       return stdout.trim()
     } catch {
       return ''
@@ -331,11 +386,24 @@ export class TmuxRuntime implements AgentRuntime {
     try {
       const sName = this.sanitizeName(name)
       const sLines = Math.max(1, Math.min(10000, Math.floor(lines)))
-      const { stdout } = await execAsync(
-        `tmux capture-pane -t "${sName}" -p -S -${sLines} 2>/dev/null || tmux capture-pane -t "${sName}" -p`,
-        { encoding: 'utf8', timeout: 3000, shell: '/bin/bash' }
-      )
-      return stdout
+      const startTime = Date.now()
+      try {
+        const { stdout } = await execFileAsync(
+          'tmux',
+          ['capture-pane', '-t', sName, '-p', '-S', `-${sLines}`],
+          { encoding: 'utf8', timeout: 3000 }
+        )
+        return stdout
+      } catch {
+        const remainingTimeout = 3000 - (Date.now() - startTime)
+        if (remainingTimeout <= 0) return ''
+        const { stdout } = await execFileAsync(
+          'tmux',
+          ['capture-pane', '-t', sName, '-p'],
+          { encoding: 'utf8', timeout: remainingTimeout }
+        )
+        return stdout
+      }
     } catch {
       return ''
     }
@@ -346,14 +414,18 @@ export class TmuxRuntime implements AgentRuntime {
   async setEnvironment(name: string, key: string, value: string): Promise<void> {
     const sName = this.sanitizeName(name)
     const sKey = key.replace(/[^a-zA-Z0-9_]/g, '')
-    const sValue = value.replace(/'/g, "'\\''")
-    await execAsync(`tmux set-environment -t "${sName}" ${sKey} '${sValue}'`)
+    const sValue = escapeTmuxArg(value)
+    await execFileAsync('tmux', ['set-environment', '-t', sName, '--', sKey, sValue])
   }
 
   async unsetEnvironment(name: string, key: string): Promise<void> {
     const sName = this.sanitizeName(name)
     const sKey = key.replace(/[^a-zA-Z0-9_]/g, '')
-    await execAsync(`tmux set-environment -t "${sName}" -r ${sKey} 2>/dev/null || true`)
+    try {
+      await execFileAsync('tmux', ['set-environment', '-t', sName, '-r', '--', sKey])
+    } catch {
+      // Best-effort if variable was not set or session does not exist
+    }
   }
 
   // -- PTY -----------------------------------------------------------------

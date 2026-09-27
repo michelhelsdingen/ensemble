@@ -22,7 +22,7 @@ P1's zijn intussen opgelost (zie hieronder). Wat resteert staat onder Open.
 | 1 | Geen test suite, geen test/lint scripts in package.json | Opgelost: `npm test` (vitest) + `npm run lint`, `tests/` map |
 | 2 | JSONL persistence zonder file locking, race conditions bij multi-process | Opgelost: lock met timeout in `lib/ensemble-registry.ts` |
 | 3 | ~~Undocumented ai-maestro dependency~~ → renamed to ~/.ensemble | Opgelost |
-| 4 | execAsync met string interpolation, command injection risk in agent-runtime | Open: nog steeds template strings naar `execAsync` in `lib/agent-runtime.ts`, namen lopen wel door `sanitizeName()`, niet apart geverifieerd of dat afdoende is |
+| 4 | execAsync met string interpolation, command injection risk in agent-runtime | Opgelost: alle tmux-aanroepen in `lib/agent-runtime.ts` omgezet naar execFile met argumentenlijst, zonder shell |
 | 5 | Shell script embeds variabelen in inline Python, ensemble-bridge.sh | Opgelost: script is nu pure bash, geen ingebedde Python meer |
 | 6 | Code duplicatie in cli/monitor.ts (apiGet/apiPost + polling) | Opgelost: apiGet/apiPost samengevoegd in `cli/api-client.ts`, gedeeld door `cli/monitor.ts` en `cli/ensemble.ts`; polling bewust lokaal gehouden wegens verschillende levenscycli |
 | 7 | Geen CONTRIBUTING.md | Opgelost: `CONTRIBUTING.md` in repo root |
