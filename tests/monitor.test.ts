@@ -4,6 +4,7 @@ import { stripVTControlCharacters } from 'node:util'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import * as agentConfig from '../lib/agent-config'
+import * as apiClient from '../cli/api-client'
 
 interface Message {
   id: string
@@ -32,9 +33,11 @@ const compiled = ts.transpileModule(source.slice(0, mainCall).replace(/^#![^\n]*
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText
 const nativeRequire = createRequire(import.meta.url)
-const Monitor = new Function('require', 'exports', compiled)((name: string) =>
-  name === '../lib/agent-config' ? agentConfig : nativeRequire(name),
-  {}) as new (teamId: string) => TestMonitor
+const Monitor = new Function('require', 'exports', compiled)((name: string) => {
+  if (name === '../lib/agent-config') return agentConfig
+  if (name === './api-client' || name === './api-client.js') return apiClient
+  return nativeRequire(name)
+}, {}) as new (teamId: string) => TestMonitor
 
 const contents = [
   'claude-1 (claude -> claude @ local) has joined #collab-1789928924528-5697',

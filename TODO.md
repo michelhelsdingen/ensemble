@@ -24,7 +24,7 @@ P1's zijn intussen opgelost (zie hieronder). Wat resteert staat onder Open.
 | 3 | ~~Undocumented ai-maestro dependency~~ → renamed to ~/.ensemble | Opgelost |
 | 4 | execAsync met string interpolation, command injection risk in agent-runtime | Open: nog steeds template strings naar `execAsync` in `lib/agent-runtime.ts`, namen lopen wel door `sanitizeName()`, niet apart geverifieerd of dat afdoende is |
 | 5 | Shell script embeds variabelen in inline Python, ensemble-bridge.sh | Opgelost: script is nu pure bash, geen ingebedde Python meer |
-| 6 | Code duplicatie in cli/monitor.ts (apiGet/apiPost + polling) | Open: dezelfde `apiGet`/`apiPost` staan nog los in `cli/monitor.ts` én `cli/ensemble.ts` |
+| 6 | Code duplicatie in cli/monitor.ts (apiGet/apiPost + polling) | Opgelost: apiGet/apiPost samengevoegd in `cli/api-client.ts`, gedeeld door `cli/monitor.ts` en `cli/ensemble.ts`; polling bewust lokaal gehouden wegens verschillende levenscycli |
 | 7 | Geen CONTRIBUTING.md | Opgelost: `CONTRIBUTING.md` in repo root |
 | 8 | Geen .gitignore voor generated/temp files | Opgelost: `.gitignore` aanwezig |
 

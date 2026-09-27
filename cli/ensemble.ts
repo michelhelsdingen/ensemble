@@ -10,13 +10,17 @@
  *   ensemble status                         Server health + active teams
  */
 
-import http from 'http'
 import fs from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import path from 'path'
+import { createApiClient } from './api-client'
 
-const API_BASE = process.env.ENSEMBLE_URL || 'http://localhost:23000'
+const { baseUrl: API_BASE, apiGet, apiPost } = createApiClient({
+  getTimeoutMs: 3000,
+  postTimeoutMs: 5000,
+  urlMode: 'concat',
+})
 
 // Resolve package root (works both in dev and when installed via npm)
 const __cli_filename = fileURLToPath(import.meta.url)
@@ -39,33 +43,6 @@ const c = {
   bgBlue: '\x1b[44m', bgGreen: '\x1b[42m',
 }
 
-function apiGet<T>(urlPath: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    http.get(`${API_BASE}${urlPath}`, { timeout: 3000 }, res => {
-      let d = ''
-      res.on('data', chunk => d += chunk)
-      res.on('end', () => { try { resolve(JSON.parse(d)) } catch(e) { reject(e) } })
-    }).on('error', reject)
-  })
-}
-
-function apiPost(urlPath: string, body: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body)
-    const req = http.request(`${API_BASE}${urlPath}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) },
-      timeout: 5000,
-    }, res => {
-      let d = ''
-      res.on('data', chunk => d += chunk)
-      res.on('end', () => { try { resolve(JSON.parse(d)) } catch(e) { reject(e) } })
-    })
-    req.on('error', reject)
-    req.write(payload)
-    req.end()
-  })
-}
 
 // ─── Commands ───
 
