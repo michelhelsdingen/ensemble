@@ -28,13 +28,18 @@ const GATES: Array<{ name: string; pattern: RegExp; defaultKeys: GateKeys }> = [
     pattern: /WARNING: Claude Code running in Bypass Permissions mode/i,
     defaultKeys: 'down-enter',
   },
+  {
+    name: 'skip permissions warning',
+    pattern: /Yes, I accept the risks and want to skip permissions/i,
+    defaultKeys: 'down-enter',
+  },
 ]
 
 /** How many non-empty lines at the bottom of the pane a live dialog occupies. */
 const LIVE_TAIL_LINES = 15
 
-/** A selected menu line, e.g. " ❯ No, exit" or "› 2. No, quit". */
-const SELECTED_NO = /^\s*[❯›>]\s*(\d+\.\s*)?No\b/
+/** A selected menu line, e.g. " ❯ No, exit" or "● No, exit". */
+const SELECTED_NO = /^[\s│]*[❯›>●]\s*(\d+\.\s*)?No\b/
 
 export function detectLiveGate(paneOutput: string): LiveGate | null {
   const tail = paneOutput
@@ -48,6 +53,22 @@ export function detectLiveGate(paneOutput: string): LiveGate | null {
 
   const selectedNo = tail.some(line => SELECTED_NO.test(line))
   return { name: gate.name, keys: selectedNo ? 'down-enter' : gate.defaultKeys }
+}
+
+/** Send the same confirmation keys in a team session or a startup probe. */
+export async function confirmLiveGate(
+  gate: LiveGate,
+  sendKeys: (keys: string, options?: { enter?: boolean }) => Promise<void>,
+): Promise<void> {
+  // A dialog can be drawn before its menu accepts keys; let it settle first.
+  await new Promise(resolve => setTimeout(resolve, 800))
+  if (gate.keys === 'down-enter') {
+    // A TUI can still be handling Down when Enter arrives in the same write,
+    // which confirms the old selection ("No, exit"). Give it a moment.
+    await sendKeys('Down')
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await sendKeys('Enter')
+  } else await sendKeys('Enter')
 }
 
 const SHELL_NAMES = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh'])

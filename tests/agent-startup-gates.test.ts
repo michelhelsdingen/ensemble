@@ -62,6 +62,11 @@ describe('detectLiveGate', () => {
     const pane = 'WARNING: Claude Code running in Bypass Permissions mode\n❯ 1. No, exit\n  2. Yes, I accept'
     expect(detectLiveGate(pane)).toEqual({ name: 'bypass permissions warning', keys: 'down-enter' })
   })
+
+  it('kiest accept bij de geselecteerde No-optie van de permissievraag', () => {
+    const pane = '◆\n● No, exit (recommended)\n○ Yes, I accept the risks and want to skip permissions'
+    expect(detectLiveGate(pane)).toEqual({ name: 'skip permissions warning', keys: 'down-enter' })
+  })
 })
 
 describe('isShellCommand', () => {

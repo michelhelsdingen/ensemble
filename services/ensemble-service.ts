@@ -19,7 +19,7 @@ import {
 } from '../lib/agent-spawner'
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
-import { detectLiveGate, isShellCommand } from '../lib/startup-gates'
+import { confirmLiveGate, detectLiveGate, isShellCommand } from '../lib/startup-gates'
 import { resolveAgentProgram, resolveAgentProgramDetailed, availableAgentKeys } from '../lib/agent-config'
 import { exportObservation, checkMemoryEndpoint, type MemoryExportResult } from '../lib/memory-export'
 import { AgentWatchdog } from '../lib/agent-watchdog'
@@ -765,11 +765,7 @@ async function waitForReady(
         if (gate) {
           const now = Date.now()
           if (gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
-            if (gate.keys === 'down-enter') {
-              await runtime.sendKeys(sessionName, 'Down', { enter: true })
-            } else {
-              await runtime.sendKeys(sessionName, 'Enter')
-            }
+            await confirmLiveGate(gate, (keys, options) => runtime.sendKeys(sessionName, keys, options))
             lastGateName = gate.name
             lastGateHandledAt = now
             console.log(`[Ensemble] Auto-confirmed ${gate.name} in ${sessionName}`)

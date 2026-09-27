@@ -4,13 +4,16 @@ import os from 'os'
 import path from 'path'
 import { promisify } from 'util'
 import { buildAgentStartupCommand, loadAgentsConfig } from '../lib/agent-config'
+import { confirmLiveGate, detectLiveGate, isShellCommand } from '../lib/startup-gates'
+
+const MENU_LINE = /^[\s│]*[❯›>●○]\s*(\d+\.\s*)?(Yes|No)\b/
 import type { AgentProgram } from '../types/agent-program'
 
 const execFileAsync = promisify(execFile)
 const pollMs = 100
 
 type Status = 'ok' | 'missing' | 'no-ready-marker' | 'crashed'
-interface Result { status: Status; seconds: number; version?: string; detail?: string }
+interface Result { status: Status; seconds: number; gates: string[]; version?: string; detail?: string }
 
 async function tmux(socket: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('tmux', ['-S', socket, ...args], { encoding: 'utf8', timeout: 3000 })
@@ -44,39 +47,63 @@ function lastLines(screen: string): string {
 
 async function probe(key: string, agent: AgentProgram, timeoutSeconds: number): Promise<Result> {
   const started = Date.now()
-  if (!onPath(agent.command)) return { status: 'missing', seconds: 0 }
+  if (!onPath(agent.command)) return { status: 'missing', seconds: 0, gates: [] }
   const cliVersion = await version(agent.command)
   const base = fs.mkdtempSync(path.join(process.platform === 'win32' ? os.tmpdir() : '/tmp', 'ens-smoke-'))
   const socket = path.join(base, 's')
   const cwd = path.join(base, 'work')
   const session = 'probe'
   const token = path.basename(base)
-  const begin = `BEGIN_${token}`
   const end = `END_${token}`
   const elapsed = () => Math.round((Date.now() - started) / 10) / 100
+  const gates: string[] = []
+  const result = (status: Status, detail?: string): Result => ({
+    status, seconds: elapsed(), gates, ...(cliVersion && { version: cliVersion }), ...(detail && { detail }),
+  })
   let screen = ''
+  let lastGateName = ''
+  let lastGateHandledAt = 0
   try {
     fs.mkdirSync(cwd)
     await tmux(socket, 'new-session', '-d', '-s', session, '-c', cwd, '-x', '160', '-y', '40')
-    const launch = `printf '\\n${begin}\\n'; ${buildAgentStartupCommand(key, cwd)}; printf '\\n${end}:%s\\n' "$?"`
+    const launch = `${buildAgentStartupCommand(key, cwd)}; printf '\\n${end}:%s\\n' "$?"`
     await tmux(socket, 'send-keys', '-t', session, '-l', launch)
     await tmux(socket, 'send-keys', '-t', session, 'Enter')
 
-    const deadline = Date.now() + timeoutSeconds * 1000
+    const deadline = started + timeoutSeconds * 1000
     while (Date.now() < deadline) {
-      screen = await tmux(socket, 'capture-pane', '-p', '-t', session, '-S', '-200')
-      const lines = screen.split(/\r?\n/)
-      const beginIndex = lines.findIndex(line => line.trim() === begin)
-      const afterBegin = beginIndex < 0 ? '' : lines.slice(beginIndex + 1).join('\n')
-      if (afterBegin.includes(agent.readyMarker)) return { status: 'ok', seconds: elapsed(), ...(cliVersion && { version: cliVersion }) }
-      if (new RegExp(`(?:^|\\n)${end}:\\d+`, 'm').test(afterBegin)) {
-        return { status: 'crashed', seconds: elapsed(), ...(cliVersion && { version: cliVersion }), detail: lastLines(afterBegin) }
+      screen = await tmux(socket, 'capture-pane', '-p', '-t', session)
+      if (new RegExp(`(?:^|\\n)${end}:\\d+(?:\\r?\\n|$)`).test(screen)) return result('crashed', lastLines(screen))
+      const foreground = (await tmux(socket, 'display-message', '-p', '-t', session, '#{pane_current_command}')).trim()
+      if (isShellCommand(foreground)) {
+        if (Date.now() - started >= 5000) return result('crashed', lastLines(screen))
+        await new Promise(resolve => setTimeout(resolve, pollMs))
+        continue
       }
+      const gate = detectLiveGate(screen)
+      // A marker below the last menu line of an answered dialog means the CLI moved on;
+      // a marker inside the menu itself (for example "❯ 1. Yes") does not count.
+      const lines = screen.split(/\r?\n/)
+      let lastMenuLine = -1
+      lines.forEach((line, index) => { if (MENU_LINE.test(line)) lastMenuLine = index })
+      if (gate && gates.length && lines.slice(lastMenuLine + 1).join('\n').includes(agent.readyMarker)) return result('ok')
+      if (gate) {
+        const now = Date.now()
+        if (gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
+          await confirmLiveGate(gate, async (keys, options) => {
+            if (options?.enter) await tmux(socket, 'send-keys', '-t', session, keys, 'Enter')
+            else await tmux(socket, 'send-keys', '-t', session, keys)
+          })
+          gates.push(gate.name)
+          lastGateName = gate.name
+          lastGateHandledAt = now
+        }
+      } else if (screen.includes(agent.readyMarker)) return result('ok')
       await new Promise(resolve => setTimeout(resolve, pollMs))
     }
-    return { status: 'no-ready-marker', seconds: elapsed(), ...(cliVersion && { version: cliVersion }), detail: lastLines(screen) }
+    return result('no-ready-marker', lastLines(screen))
   } catch (error) {
-    return { status: 'crashed', seconds: elapsed(), ...(cliVersion && { version: cliVersion }), detail: error instanceof Error ? error.message : String(error) }
+    return result('crashed', error instanceof Error ? error.message : String(error))
   } finally {
     try { await tmux(socket, 'kill-server') } catch { /* server may already be gone */ }
     fs.rmSync(base, { recursive: true, force: true })

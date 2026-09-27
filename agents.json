@@ -40,7 +40,7 @@
     "name": "opencode",
     "command": "opencode",
     "flags": [],
-    "readyMarker": "Ask anything",
+    "readyMarker": "ctrl+p commands",
     "inputMethod": "sendKeys",
     "color": "cyan",
     "icon": "▣"
