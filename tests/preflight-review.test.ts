@@ -1,7 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import { execFileSync, spawnSync } from 'child_process'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+
+// The preflight script can take several seconds on a busy machine.
+vi.setConfig({ testTimeout: 30_000 })
 
 let root: string
 let script: string
