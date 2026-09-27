@@ -7,57 +7,114 @@ const root = fs.mkdtempSync(path.resolve('tmp/launch-selection-'))
 const scripts = path.join(root, 'scripts')
 fs.mkdirSync(scripts)
 for (const name of ['collab-launch.sh', 'collab-paths.sh']) fs.copyFileSync(path.resolve('scripts', name), path.join(scripts, name))
-fs.writeFileSync(path.join(scripts, 'collab-preflight.sh'), '#!/bin/bash\nprintf "%s" "$1" > "$TEST_REQUEST"\nprintf "glm,claude\\n" > "$COLLAB_OVERRIDE_FILE"\nexit "${TEST_PREFLIGHT_EXIT:-0}"\n', { mode: 0o755 })
+fs.copyFileSync(path.resolve('agents.json'), path.join(root, 'agents.json'))
+fs.writeFileSync(path.join(scripts, 'collab-preflight.sh'), [
+  '#!/bin/bash',
+  'printf "%s|%s" "$1" "$COLLAB_AGENTS_SOURCE" > "$TEST_REQUEST"',
+  'if [ -n "$TEST_OVERRIDE" ]; then printf "%s\\n" "$TEST_OVERRIDE" > "$COLLAB_OVERRIDE_FILE"; fi',
+  'exit "$TEST_PREFLIGHT_EXIT"',
+].join('\n'), { mode: 0o755 })
 fs.writeFileSync(path.join(root, 'curl'), '#!/bin/bash\nfor arg in "$@"; do\ncase "$arg" in @*) cp "${arg#@}" "$TEST_PAYLOAD"; exit 23;; esac\ndone\necho "{}"\n', { mode: 0o755 })
+const plan = path.join(root, 'plan.sh')
+fs.writeFileSync(plan, [
+  '#!/bin/bash',
+  'printf "%s" "$1" > "$TEST_PLAN_TASK"',
+  'printf "%s" "$TEST_PLAN_OUTPUT"',
+  'exit "$TEST_PLAN_EXIT"',
+].join('\n'), { mode: 0o755 })
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
-function run(agents = '', exit = '0') {
-  fs.writeFileSync(path.join(root, 'override'), 'grok')
-  return spawnSync('/bin/bash', [path.join(scripts, 'collab-launch.sh'), root, 'Inspect code', agents], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}`, TMPDIR: root,
-      COLLAB_AGENTS: '', COLLAB_SKIP_PREFLIGHT: '0', COLLAB_OVERRIDE_FILE: path.join(root, 'override'),
-      ENSEMBLE_URL: 'http://unused.invalid', TEST_REQUEST: path.join(root, 'request'),
-      TEST_PAYLOAD: path.join(root, 'payload'), TEST_PREFLIGHT_EXIT: exit,
-    },
-  })
-}
-it('uses the new preflight selection for the same launch, ignoring stale overrides', () => {
-  run()
-  expect(fs.readFileSync(path.join(root, 'request'), 'utf8')).toBe('')
-  const payload = JSON.parse(fs.readFileSync(path.join(root, 'payload'), 'utf8'))
-  expect(payload.agents.map((a: {program: string}) => a.program)).toEqual(['glm', 'claude'])
-})
-it('preserves an explicit composition', () => {
-  run('gemini,claude')
-  const payload = JSON.parse(fs.readFileSync(path.join(root, 'payload'), 'utf8'))
-  expect(payload.agents.map((a: {program: string}) => a.program)).toEqual(['gemini', 'claude'])
-})
-it('propagates health exit code 7 to the caller', () => {
-  expect(run('', '7').status).toBe(7)
-})
-it('uses the default pair when there are no explicit agents, override, or plan command', () => {
-  const absentOverride = path.join(root, 'no-override')
-  spawnSync('/bin/bash', [path.join(scripts, 'collab-launch.sh'), root, 'Plan this task'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}`, TMPDIR: root,
-      COLLAB_AGENTS: '', COLLAB_SKIP_PREFLIGHT: '1', COLLAB_OVERRIDE_FILE: absentOverride,
-      COLLAB_WORKTREE: 'team', ENSEMBLE_CONFIG: absentOverride, ENSEMBLE_PLAN_CMD: '',
-      ENSEMBLE_URL: 'http://unused.invalid', TEST_PAYLOAD: path.join(root, 'planned-payload'),
-    },
-  })
-  const payload = JSON.parse(fs.readFileSync(path.join(root, 'planned-payload'), 'utf8'))
-  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['codex', 'claude code'])
-  expect(payload.worktree).toBe('team')
-})
-it('leaves agent planning to the service when a plan command is configured', () => {
+
+function run(options: {
+  agents?: string; template?: string; planExit?: string; override?: string;
+  oldOverride?: string; skipPreflight?: boolean; configPlan?: boolean;
+  task?: string; preflightExit?: string; envAgents?: string; noPlan?: boolean
+} = {}) {
+  const overrideFile = path.join(root, 'override')
+  fs.rmSync(overrideFile, { force: true })
+  fs.rmSync(path.join(root, 'plan-task'), { force: true })
+  fs.rmSync(path.join(root, 'payload'), { force: true })
+  if (options.oldOverride) fs.writeFileSync(overrideFile, options.oldOverride)
   const config = path.join(root, 'config.json')
-  fs.writeFileSync(config, JSON.stringify({ planCommand: 'plan task' }))
-  spawnSync('/bin/bash', [path.join(scripts, 'collab-launch.sh'), root, 'Plan this task'], {
+  fs.writeFileSync(config, JSON.stringify(options.configPlan ? { planCommand: plan } : {}))
+  const args = [path.join(scripts, 'collab-launch.sh'), root, options.task ?? 'Inspect code']
+  if (options.agents !== undefined || options.template !== undefined) args.push(options.agents ?? '')
+  if (options.template !== undefined) args.push(options.template)
+  const result = spawnSync('/bin/bash', args, {
     encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}`, TMPDIR: root,
-      COLLAB_AGENTS: '', COLLAB_SKIP_PREFLIGHT: '1', COLLAB_OVERRIDE_FILE: path.join(root, 'no-override'),
-      COLLAB_WORKTREE: 'team', ENSEMBLE_CONFIG: config, ENSEMBLE_PLAN_CMD: '',
-      ENSEMBLE_URL: 'http://unused.invalid', TEST_PAYLOAD: path.join(root, 'planned-payload'),
+      COLLAB_AGENTS: options.envAgents ?? '', COLLAB_SKIP_PREFLIGHT: options.skipPreflight ? '1' : '0',
+      COLLAB_OVERRIDE_FILE: overrideFile, COLLAB_WORKTREE: 'team', ENSEMBLE_CONFIG: config,
+      ENSEMBLE_PLAN_CMD: options.configPlan || options.noPlan ? '' : plan, ENSEMBLE_URL: 'http://unused.invalid',
+      TEST_REQUEST: path.join(root, 'request'), TEST_PAYLOAD: path.join(root, 'payload'),
+      TEST_PLAN_TASK: path.join(root, 'plan-task'),
+      TEST_PLAN_OUTPUT: '{"agents":["agy","mimo"],"template":"implement","reason":"capacity"}',
+      TEST_PLAN_EXIT: options.planExit ?? '0', TEST_OVERRIDE: options.override ?? '',
+      TEST_PREFLIGHT_EXIT: options.preflightExit ?? '0',
     },
   })
-  const payload = JSON.parse(fs.readFileSync(path.join(root, 'planned-payload'), 'utf8'))
-  expect(payload.agents).toEqual([])
+  const payload = fs.existsSync(path.join(root, 'payload')) ? JSON.parse(fs.readFileSync(path.join(root, 'payload'), 'utf8')) : undefined
+  return { result, payload, request: fs.existsSync(path.join(root, 'request')) ? fs.readFileSync(path.join(root, 'request'), 'utf8') : '' }
+}
+
+it('uses configured plan agents and template before preflight', () => {
+  const { result, payload, request } = run({ configPlan: true })
+  expect(request).toBe('agy,mimo|plan')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['agy', 'mimo'])
+  expect(payload.templateName).toBe('implement')
   expect(payload.worktree).toBe('team')
+  expect(result.stdout).toContain('Plan: agents=agy,mimo, template=implement (capacity)')
+})
+
+it('falls back to the default pair when planning fails', () => {
+  const { payload, request } = run({ planExit: '1' })
+  expect(request).toBe('|env')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['codex', 'claude code'])
+})
+
+it('uses the default pair when no plan is configured', () => {
+  const { payload } = run({ noPlan: true })
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['codex', 'claude code'])
+})
+
+it('does not call the plan for explicit agents', () => {
+  const { payload, request } = run({ agents: 'gemini,claude', template: 'review' })
+  expect(request).toBe('gemini,claude|explicit')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['gemini', 'claude'])
+  expect(payload.templateName).toBe('review')
+  expect(fs.existsSync(path.join(root, 'plan-task'))).toBe(false)
+})
+
+it('uses an explicit template over the plan template', () => {
+  const { payload } = run({ template: 'review' })
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['agy', 'mimo'])
+  expect(payload.templateName).toBe('review')
+})
+
+it('does not call the plan for COLLAB_AGENTS and keeps fallback enabled', () => {
+  const { payload, request } = run({ envAgents: 'codex,mimo', override: 'mimo' })
+  expect(request).toBe('codex,mimo|env')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['mimo'])
+  expect(fs.existsSync(path.join(root, 'plan-task'))).toBe(false)
+})
+
+it('uses preflight fallback for planned agents', () => {
+  const { payload, request } = run({ override: 'mimo' })
+  expect(request).toBe('agy,mimo|plan')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['mimo'])
+})
+
+it('ignores an old override when this run writes none', () => {
+  const { payload } = run({ oldOverride: 'grok', skipPreflight: true, planExit: '1' })
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['codex', 'claude code'])
+})
+
+it('passes shell metacharacters in the task literally', () => {
+  const task = 'check $(touch bad) ; `echo no` "quoted"'
+  const { payload } = run({ task })
+  expect(fs.readFileSync(path.join(root, 'plan-task'), 'utf8')).toBe(task)
+  expect(fs.existsSync(path.join(root, 'bad'))).toBe(false)
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['agy', 'mimo'])
+})
+
+it('preserves the preflight failure code', () => {
+  expect(run({ preflightExit: '7' }).result.status).toBe(7)
 })

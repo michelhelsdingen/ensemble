@@ -27,9 +27,13 @@ TASK="${2:?Usage: collab-launch.sh <cwd> <task> [agents] [template]}"
 # COLLAB_AGENTS so a preferred line-up can be set once in the shell instead of
 # being retyped every run; collab-preflight.sh already reads the same variable.
 # Precedence: 3rd argument > COLLAB_AGENTS > configured plan > default pair.
-# Note this also disables the auto-fallback below, which is intended: naming
-# your agents, by argument or by env, means a dead one is a hard failure.
+# Only the positional argument is explicit; environment and plan selections
+# keep preflight's automatic fallback.
 AGENTS="${3:-${COLLAB_AGENTS:-}}"
+AGENTS_SOURCE="explicit"
+if [ -z "${3:-}" ]; then
+  AGENTS_SOURCE="env"
+fi
 # Optional collab template key from collab-templates.json (review|implement|research|debug).
 # Assigns explicit roles to each agent instead of the generic lead/worker prompt.
 TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
@@ -39,8 +43,65 @@ TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
 # default is under the shared runtime root and can be overridden by callers.
 # Only kicks in if caller didn't specify AGENTS explicitly.
 OVERRIDE_FILE="${COLLAB_OVERRIDE_FILE:-$(collab_runtime_root)/collab-agents-override.txt}"
+rm -f "$OVERRIDE_FILE"
 API="${ENSEMBLE_URL:-http://localhost:23000}"
 HOST_ID="${ENSEMBLE_HOST_ID:-local}"
+
+# Resolve a configured plan before preflight so its agents are the ones probed.
+# The task is passed as a positional argument, never interpolated into shell code.
+if [ -z "$AGENTS" ]; then
+  PLAN_RESULT=$(python3 - "$REPO_DIR/agents.json" "$TASK" <<'PY'
+import json, os, signal, subprocess, sys
+
+command = os.environ.get('ENSEMBLE_PLAN_CMD', '').strip()
+if not command:
+    config_path = os.environ.get('ENSEMBLE_CONFIG', os.path.expanduser('~/.config/ensemble/config.json'))
+    try:
+        with open(config_path) as source:
+            command = json.load(source).get('planCommand', '')
+    except (OSError, ValueError, AttributeError):
+        command = ''
+if not isinstance(command, str) or not command.strip():
+    sys.exit(1)
+try:
+    with open(sys.argv[1]) as source:
+        known = set(json.load(source))
+    process = subprocess.Popen(
+        ['/bin/bash', '-c', command + ' "$@"', 'ensemble-plan', sys.argv[2]],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        sys.exit(1)
+    if process.returncode:
+        sys.exit(1)
+    plan = json.loads(output)
+    agents = plan.get('agents')
+    if not isinstance(agents, list) or not agents or not all(isinstance(key, str) for key in agents):
+        sys.exit(1)
+    agents = [key for key in agents if key in known]
+    if not agents:
+        sys.exit(1)
+    template = plan.get('template', '')
+    reason = plan.get('reason', '')
+    if not isinstance(template, str) or not isinstance(reason, str):
+        sys.exit(1)
+    clean = lambda value: ' '.join(value.split()).replace('\x1f', ' ')
+    print('\x1f'.join([','.join(agents), clean(template), clean(reason)[:120]]))
+except (OSError, ValueError, AttributeError, TypeError):
+    sys.exit(1)
+PY
+  ) || PLAN_RESULT=""
+  if [ -n "$PLAN_RESULT" ]; then
+    IFS=$'\x1f' read -r AGENTS PLAN_TEMPLATE PLAN_REASON <<< "$PLAN_RESULT"
+    AGENTS_SOURCE="plan"
+    if [ -z "$TEMPLATE" ]; then TEMPLATE="$PLAN_TEMPLATE"; fi
+    echo "Plan: agents=$AGENTS, template=${TEMPLATE:-none}${PLAN_REASON:+ ($PLAN_REASON)}"
+  fi
+fi
 
 # ─── Colors ───
 G='\033[92m'; C='\033[96m'; D='\033[2m'; W='\033[97m'; BD='\033[1m'; R='\033[0m'
@@ -72,7 +133,7 @@ fi
 # Skip with COLLAB_SKIP_PREFLIGHT=1 if needed.
 # Pass the requested agents so preflight only checks the CLIs this run needs.
 if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
-  if "$SCRIPT_DIR/collab-preflight.sh" "$AGENTS" 2>&1 | sed 's/^/  /'; then
+  if COLLAB_AGENTS_SOURCE="$AGENTS_SOURCE" "$SCRIPT_DIR/collab-preflight.sh" "$AGENTS" 2>&1 | sed 's/^/  /'; then
     :
   else
     PREFLIGHT_EXIT=${PIPESTATUS[0]}
@@ -83,7 +144,7 @@ if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
   fi
 fi
 
-if [ -z "$AGENTS" ] && [ -f "$OVERRIDE_FILE" ]; then
+if [ "$AGENTS_SOURCE" != "explicit" ] && [ -f "$OVERRIDE_FILE" ]; then
   AGENTS=$(cat "$OVERRIDE_FILE" 2>/dev/null || echo "")
   if [ -n "$AGENTS" ]; then
     echo -e "  \033[93m!\033[0m Auto-fallback aktief: agents=$AGENTS (zie preflight)"
@@ -102,15 +163,7 @@ if agents_str:
     for n in names[1:]:
         agents.append({'program': n, 'role': 'worker', 'hostId': os.environ['THOST']})
 else:
-    plan_command = os.environ.get('ENSEMBLE_PLAN_CMD', '').strip()
-    if not plan_command:
-        config_path = os.environ.get('ENSEMBLE_CONFIG', os.path.expanduser('~/.config/ensemble/config.json'))
-        try:
-            with open(config_path) as config_file:
-                plan_command = json.load(config_file).get('planCommand', '')
-        except (OSError, ValueError, AttributeError):
-            pass
-    agents = [] if isinstance(plan_command, str) and plan_command.strip() else [
+    agents = [
         {'program': 'codex', 'role': 'lead', 'hostId': os.environ['THOST']},
         {'program': 'claude code', 'role': 'worker', 'hostId': os.environ['THOST']},
     ]

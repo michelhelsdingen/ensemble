@@ -286,7 +286,8 @@ which is killed on timeout. Output is limited to 1 MiB.
   `{ "agents": ["codex", "mimo"], "template": "implement", "reason": "Complementary roles" }`.
   The first agent leads. Extra fields are ignored. Used only with missing or empty
   request agents; an explicit template wins. Invalid plans fall back to the default pair.
-  The plan and reason appear in the team feed.
+  Direct API planning records the plan and reason in the team feed.
+  With `collab-launch.sh`, missing agents let `planCommand` choose the agents and template before preflight. The launcher prints the plan choice; planned agents keep automatic health fallback.
 - `events`: no arguments, 5 seconds, one JSON line on stdin followed by EOF.
   Delivery runs in the background; failures are nonfatal and warn at most once per team.
   Every event has `event`, `teamId`, `team`, and an ISO-8601 `ts`.

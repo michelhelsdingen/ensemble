@@ -32,6 +32,14 @@ it('reports default substitution before checking the service', () => {
   expect(result.status).toBe(1)
   expect(result.stderr).toContain('Auto-fallback: codex -> glm')
 })
+it('treats plan agents as automatic for the health hook', () => {
+  const result = run('codex,mimo', { codex: { status: 'down' }, mimo: { status: 'ok' }, glm: { status: 'ok' } }, {
+    COLLAB_AGENTS_SOURCE: 'plan',
+  })
+  expect(result.status).toBe(1)
+  expect(result.stderr).toContain('Auto-fallback: codex -> glm')
+  expect(result.stderr).not.toContain('Requested agents unavailable: codex')
+})
 it('warns without blocking unknown status', () => {
   const result = run('opencode', {})
   expect(result.status).toBe(1)
@@ -46,6 +54,11 @@ it('persists the full healthy default selection after successful preflight', () 
   const result = run('', { codex: { status: 'down' }, claude: { status: 'limit' }, glm: { status: 'ok' }, grok: { status: 'down' }, gemini: { status: 'ok' } })
   expect(result.status, result.stdout + result.stderr).toBe(0)
   expect(fs.readFileSync(path.join(root, 'override'), 'utf8').trim()).toBe('glm,gemini')
+  const plannedResult = run('codex,mimo', { codex: { status: 'down' }, mimo: { status: 'ok' }, glm: { status: 'ok' } }, {
+    COLLAB_AGENTS_SOURCE: 'plan',
+  })
+  expect(plannedResult.status, plannedResult.stdout + plannedResult.stderr).toBe(0)
+  expect(fs.readFileSync(path.join(root, 'override'), 'utf8').trim()).toBe('glm,mimo')
   const runtime = path.join(root, 'custom-runtime')
   const defaultResult = run('', { codex: { status: 'down' }, claude: { status: 'limit' }, glm: { status: 'ok' }, grok: { status: 'down' }, gemini: { status: 'ok' } }, {
     COLLAB_RUNTIME_ROOT: runtime, COLLAB_OVERRIDE_FILE: '',

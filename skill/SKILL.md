@@ -271,7 +271,9 @@ The entire process group is killed on timeout. Roster takes no arguments, has a
 Plan receives task text as `$1`, has a 20-second timeout, and returns
 `{ "agents": ["codex", "mimo"], "template": "implement", "reason": "Complementary roles" }`.
 Extra plan fields are ignored. Explicit agents bypass planning; an explicit
-template wins. Failed planning uses the default team.
+template wins. Without agents, `planCommand` chooses the launcher agents and
+template before preflight; planned agents keep automatic health fallback.
+Failed planning uses the default team.
 
 Events take no arguments, receive exactly one JSON line on stdin followed by EOF,
 and have a 5-second timeout. Delivery is nonblocking and nonfatal, with at most one

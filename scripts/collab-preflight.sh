@@ -32,13 +32,14 @@ OVERRIDE_FILE="${COLLAB_OVERRIDE_FILE:-$(collab_runtime_root)/collab-agents-over
 mkdir -p "$(dirname "$OVERRIDE_FILE")"
 
 # ─── Which agents does this run need? ───
-# Only an argument is an explicit choice. COLLAB_AGENTS is a standing default
-# (often exported in a shell profile), so it gets the same automatic fallback
-# as the built-in pair instead of blocking on one unavailable agent.
+# A launcher-provided plan or COLLAB_AGENTS is a default selection. A positional
+# choice remains explicit when preflight is called directly or by the launcher.
 REQUESTED_AGENTS="${1:-}"
 EXPLICIT_AGENTS=1
 if [ -z "$REQUESTED_AGENTS" ]; then
   REQUESTED_AGENTS="${COLLAB_AGENTS:-codex,claude}"
+  EXPLICIT_AGENTS=0
+elif [ "${COLLAB_AGENTS_SOURCE:-}" = "plan" ] || [ "${COLLAB_AGENTS_SOURCE:-}" = "env" ]; then
   EXPLICIT_AGENTS=0
 fi
 
@@ -566,6 +567,33 @@ if [ -n "$HEALTH_AGENTS" ] && [ "$EXPLICIT_AGENTS" = "0" ]; then
     if [ "$CLAUDE_DEAD" = 1 ]; then fail 3 "Selected claude failed its CLI probe"; fi
     fail 6 "Selected grok failed its CLI probe"
   fi
+fi
+
+# Keep a non-default automatic selection when a CLI probe removes one member.
+# In particular, a planned team must never turn into the built-in pair here.
+if [ "$EXPLICIT_AGENTS" = "0" ] && [ "$REQUESTED_AGENTS" != "codex,claude" ]; then
+  SURVIVORS=""
+  IFS=',' read -r -a REQUESTED_KEYS <<< "$REQUESTED_AGENTS"
+  for agent in "${REQUESTED_KEYS[@]}"; do
+    case "$agent" in
+      *codex*) [ "$CODEX_DEAD" = 1 ] && continue ;;
+      *claude*) [ "$CLAUDE_DEAD" = 1 ] && continue ;;
+      *grok*) [ "$GROK_DEAD" = 1 ] && continue ;;
+    esac
+    SURVIVORS="${SURVIVORS:+$SURVIVORS,}$agent"
+  done
+  if [ -z "$SURVIVORS" ]; then
+    rm -f "$OVERRIDE_FILE"
+    if [ "$CODEX_DEAD" = 1 ]; then fail 4 "Selected codex failed its CLI probe"; fi
+    if [ "$CLAUDE_DEAD" = 1 ]; then fail 3 "Selected claude failed its CLI probe"; fi
+    fail 6 "Selected grok failed its CLI probe"
+  fi
+  if [ "$SURVIVORS" != "$REQUESTED_AGENTS" ]; then
+    printf '%s\n' "$SURVIVORS" > "$OVERRIDE_FILE"
+    warn "Auto-fallback after CLI probes: $SURVIVORS"
+  fi
+  echo -e "  ${GRN}${BD}All preflight checks passed${R}"
+  exit 0
 fi
 
 # When the caller named its agents explicitly, never silently swap in a different
