@@ -71,15 +71,45 @@ it('deduplicates repeated markers and reopens even between polls', async () => {
   await service.checkIdleTeams()
   expect(doneEvents()).toHaveLength(2)
 })
-it('disbands immediately when every active agent last sent completion', async () => {
+it('disbands immediately when all active agents signal after teammate content', async () => {
   const t = team()
-  say(t.id, t.agents[0].name, 'Tests complete. <<COLLAB_DONE>>')
   say(t.id, t.agents[1].name, 'Review complete')
-  say(t.id, t.agents[1].name, 'Conclusion\n<<COLLAB_DONE>>')
+  say(t.id, t.agents[0].name, 'Tests complete. <<COLLAB_DONE>>')
+  say(t.id, t.agents[1].name, '<<COLLAB_DONE>>')
   await service.checkIdleTeams()
   expect(registry.getTeam(t.id)?.status).toBe('disbanded')
   expect(doneEvents()).toHaveLength(2)
   expect(events).toHaveBeenCalledWith(expect.objectContaining({ event: 'team_finished', status: 'ok' }))
+})
+it.each([
+  ['a separate marker', 'The function has an off-by-one error; please fix it', '<<COLLAB_DONE>>'],
+  ['a terminal marker', 'The function has an off-by-one error; please fix it. <<COLLAB_DONE>>', undefined],
+  ['a short terminal message', 'klaar. <<COLLAB_DONE>>', undefined],
+])('keeps the team active after a teammate adds content with %s', async (_case, reply, marker) => {
+  const t = team()
+  const first = t.agents[0].name
+  const second = t.agents[1].name
+  say(t.id, first, '<<COLLAB_DONE>>')
+  say(t.id, second, reply)
+  if (marker) say(t.id, second, marker)
+  await service.checkIdleTeams()
+  expect(registry.getTeam(t.id)?.status).toBe('active')
+  expect(doneEvents()).toHaveLength(2)
+
+  say(t.id, first, '<<COLLAB_DONE>>')
+  await service.checkIdleTeams()
+  expect(registry.getTeam(t.id)?.status).toBe('disbanded')
+  expect(doneEvents()).toHaveLength(2)
+})
+it('disbands a three-agent team immediately after three bare markers', async () => {
+  const t = team()
+  registry.updateTeam(t.id, { agents: t.agents.map((agent, i) => ({
+    ...agent, status: i < 3 ? 'active' : 'replaced',
+  })) })
+  for (const agent of t.agents.slice(0, 3)) say(t.id, agent.name, '<<COLLAB_DONE>>')
+  await service.checkIdleTeams()
+  expect(registry.getTeam(t.id)?.status).toBe('disbanded')
+  expect(doneEvents()).toHaveLength(3)
 })
 it('keeps a team active when an agent resumes after its marker', async () => {
   const t = team()

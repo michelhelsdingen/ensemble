@@ -127,6 +127,9 @@ it('preserves completion when another agent posts content before finishing', asy
   post('beta', '<<COLLAB_DONE>>', 4)
   vi.setSystemTime(start + 5_000)
   await service.checkIdleTeams()
+  expect(current!.status).toBe('active')
+  vi.setSystemTime(start + 64_000)
+  await service.checkIdleTeams()
   expect(current!.status).toBe('disbanded')
 })
 it('accepts completion from all agents even at equal timestamps', async () => {
@@ -137,11 +140,15 @@ it('accepts completion from all agents even at equal timestamps', async () => {
   ].map((m, i) => ({ ...m, id: `same-${i}`, teamId: current!.id, to: 'team', type: 'chat' as const, timestamp: new Date(start + 1000).toISOString() })))
   vi.setSystemTime(start + 2000)
   await service.checkIdleTeams()
+  expect(current!.status).toBe('active')
+  vi.setSystemTime(start + 61_000)
+  await service.checkIdleTeams()
   expect(current!.status).toBe('disbanded')
 })
 it('instructs agents to answer new content after a sentinel and send it again', () => {
   const prompt = service.buildPromptPreview({ teamId: 'sample', teamName: 'sample', description: 'Inspect code', agentName: 'alpha', teammateNames: ['beta'], agentIndex: 0 })
   expect(prompt).toContain('no unanswered teammate content or question after your last message')
+  expect(prompt).toContain('about one minute from the last agent message to respond before the team closes')
   expect(prompt).toContain('If new teammate content arrives after your sentinel, respond substantively and send the sentinel again')
 })
 it('states the configured grace period in the deadline warning', async () => {
@@ -174,7 +181,7 @@ it('makes the time limit the primary summary reason even when agents never poste
   expect(summary).not.toContain('points at prompt delivery')
   expect(summary).toContain('Messages: 0')
 })
-it('ends an all-sentinel team immediately despite later system chatter', async () => {
+it('ends an all-sentinel team after grace despite later system chatter', async () => {
   const post = (from: string, content: string, seconds: number) => messages.push({
     id: `idle-${messages.length}`, teamId: current!.id, from, to: 'team', content,
     type: 'chat', timestamp: new Date(start + seconds * 1000).toISOString(),
@@ -184,6 +191,47 @@ it('ends an all-sentinel team immediately despite later system chatter', async (
   post('beta', '<<COLLAB_DONE>>', 3)
   post('ensemble', 'Watchdog status update', 4)
   vi.setSystemTime(start + 4_000)
+  await service.checkIdleTeams()
+  expect(current!.status).toBe('active')
+  vi.setSystemTime(start + 63_000)
+  await service.checkIdleTeams()
+  expect(current!.status).toBe('disbanded')
+})
+it('closes immediately when only system messages follow all agent sentinels', async () => {
+  const post = (from: string, content: string, seconds: number) => messages.push({
+    id: `system-${messages.length}`, teamId: current!.id, from, to: 'team', content,
+    type: 'chat', timestamp: new Date(start + seconds * 1000).toISOString(),
+  })
+  post('beta', 'Finished checking', 1)
+  post('alpha', '<<COLLAB_DONE>>', 2)
+  post('beta', '<<COLLAB_DONE>>', 3)
+  post('ensemble', 'Watchdog status update', 4)
+  post('system', 'System status update', 5)
+  vi.setSystemTime(start + 5_000)
+  await service.checkIdleTeams()
+  expect(current!.status).toBe('disbanded')
+})
+it('stays open for an answer within grace and closes after a renewed sentinel', async () => {
+  const post = (from: string, content: string, seconds: number) => messages.push({
+    id: `answer-${messages.length}`, teamId: current!.id, from, to: 'team', content,
+    type: 'chat', timestamp: new Date(start + seconds * 1000).toISOString(),
+  })
+  post('alpha', '<<COLLAB_DONE>>', 1)
+  post('beta', 'Can you confirm the result?', 2)
+  post('beta', '<<COLLAB_DONE>>', 3)
+  vi.setSystemTime(start + 30_000)
+  post('alpha', 'Yes, I confirmed the result.', 30)
+  await service.checkIdleTeams()
+  expect(current!.status).toBe('active')
+  vi.setSystemTime(start + 63_000)
+  await service.checkIdleTeams()
+  expect(current!.status).toBe('active')
+  post('alpha', '<<COLLAB_DONE>>', 64)
+  vi.setSystemTime(start + 64_000)
+  await service.checkIdleTeams()
+  // Beta's marker predates alpha's answer, so beta gets the grace period to react.
+  expect(current!.status).toBe('active')
+  vi.setSystemTime(start + 124_000)
   await service.checkIdleTeams()
   expect(current!.status).toBe('disbanded')
 })

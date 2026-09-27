@@ -50,6 +50,7 @@ const IDLE_CHECK_INTERVAL_MS = 15_000
 // How long a freshly typed start command may leave the shell in the foreground
 // before the agent counts as not started (a wrapper script execs quickly).
 const AGENT_START_GRACE_MS = 5_000
+const COMPLETION_GRACE_MS = 60_000
 const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // How long a team must be silent before completion WORDING may end it.
 //
@@ -59,13 +60,13 @@ const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // everyone went quiet to actually read code. Sixty seconds of silence is not an
 // idle team, it is an agent reading a file. Research runs routinely go minutes
 // without posting, so the wording path needs a margin that only a genuinely
-// finished team reaches. The exact sentinel remains the fast path and is
-// unaffected: a team that is really done still ends within seconds.
+// finished team reaches. Exact sentinels use immediate closure when no newer
+// teammate content needs an answer, or a short grace period otherwise.
 const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 480_000
 const TWO_SIGNAL_IDLE_THRESHOLD_MS = 300_000
 const MIN_MESSAGES_BEFORE_AUTO_DISBAND = 10
-// A terminal sentinel from every active agent ends the team without an idle
-// wait or minimum message count. Prompts prefer a separate marker message.
+// A terminal sentinel from every active agent bypasses the long idle fallback
+// and minimum message count. Prompts prefer a separate marker message.
 const COMPLETION_PATTERNS = [
   /(?:^|[^\p{L}\p{N}_])afgerond(?:[^\p{L}\p{N}_]|$)/iu,
   /(?:^|[^\p{L}\p{N}_])\bdone\b(?![.\w])/iu,
@@ -394,13 +395,34 @@ class EnsembleService {
     const lastMessage = nonEnsembleMessages[nonEnsembleMessages.length - 1]
     if (!lastMessage) return false
 
-    // Only an agent's own ordinary message reopens its completed work.
-    const latestAgentMessages = [...activeNames].map(name =>
-      [...messages].reverse().find(message => message.from === name),
-    )
-    if (latestAgentMessages.length > 0 && latestAgentMessages.every(message =>
-      message !== undefined && isExplicitDone(message.content),
-    )) return true
+    // Text before a terminal marker is content for the other agents.
+    // Only active agents can add content that delays immediate closure.
+    if (activeNames.size > 0 && [...activeNames].every(name => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (message.from === name) return isExplicitDone(message.content)
+        if (!activeNames.has(message.from)) continue
+        const content = isExplicitDone(message.content)
+          ? message.content.trimEnd().slice(0, -EXPLICIT_DONE_SENTINEL.length)
+          : message.content
+        if (content.trim()) return false
+      }
+      return false
+    })) return true
+
+    // All agents may have finished while one of them has not yet answered
+    // content posted after their marker. Give that agent time to respond.
+    const activeMessages = messages.filter(message => activeNames.has(message.from))
+    const lastAgentMessage = activeMessages.at(-1)
+    if (lastAgentMessage && [...activeNames].every(name => {
+      const ownLastMessage = activeMessages.filter(message => message.from === name).at(-1)
+      return ownLastMessage !== undefined && isExplicitDone(ownLastMessage.content)
+    })) {
+      const lastAgentAt = lastAgentMessage.timestamp
+        ? new Date(lastAgentMessage.timestamp).getTime()
+        : NaN
+      if (Number.isFinite(lastAgentAt) && Date.now() - lastAgentAt >= COMPLETION_GRACE_MS) return true
+    }
 
     // Don't auto-disband until agents have exchanged enough messages
     if (nonEnsembleMessages.length < MIN_MESSAGES_BEFORE_AUTO_DISBAND) return false
@@ -722,7 +744,7 @@ export function buildPromptPreview(params: {
     `6. Keep alternating: analyze, share, read, respond, analyze`,
     `DONE PROTOCOL (important):`,
     `7. When your work is complete and there is no unanswered teammate content or question after your last message, report the conclusion and send a FINAL team-say whose message is EXACTLY the sentinel <<COLLAB_DONE>> (nothing else, no quotes, no prose). Do not send status messages without new information, do not wait for an approval that may never come, and do not leave open questions addressed to you unresolved.`,
-    `8. The team auto-disbands once every active agent has ended its latest message with <<COLLAB_DONE>>; a separate sentinel message is preferred. Only your own ordinary message reopens your completion state. Do not send a sentinel while awaiting a reply to a question. If new teammate content arrives after your sentinel, respond substantively and send the sentinel again once your work is complete and all questions addressed to you are resolved.`,
+    `8. The team auto-disbands immediately once every active agent has sent <<COLLAB_DONE>> after the latest content from every other active agent. If everyone's latest message is a sentinel but someone posted content after yours, you have about one minute from the last agent message to respond before the team closes. A separate sentinel message is preferred. Content before a sentinel also counts for teammates. Do not send a sentinel while awaiting a reply to a question. If new teammate content arrives after your sentinel, respond substantively and send the sentinel again once your work is complete and all questions addressed to you are resolved.`,
     `9. Before sending <<COLLAB_DONE>>, make sure the important conclusions (recommendation, rationale, build list, layout, decisions) are actually present as long team-say messages in the transcript — that is what the summary will preserve. Do not keep insights only in your head.`,
     `Start NOW: greet your teammate with team-say, then begin.`,
   ].join(' ')
