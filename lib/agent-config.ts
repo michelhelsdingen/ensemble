@@ -7,6 +7,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import type { AgentProgram, AgentsConfig } from '../types/agent-program'
+import { readEnsembleConfig } from './ensemble-config'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -171,4 +172,29 @@ export function buildAgentCommandParts(program: string): string[] {
  */
 export function buildAgentCommand(program: string): string {
   return buildAgentCommandParts(program).map(shellEscape).join(' ')
+}
+
+/** Build the same pane input used to start an agent in a team. */
+export function buildAgentStartupCommand(program: string, cwd: string): string {
+  const parts = buildAgentCommandParts(program)
+  const normalized = program.toLowerCase()
+  const repoRoot = path.resolve(__dirname, '..')
+
+  if (normalized.includes('codex') && !parts.some(p => p === '-C' || p === '--cd' || p.startsWith('--cd='))) {
+    parts.push('--cd', cwd)
+  }
+  if (normalized.includes('claude') && cwd !== repoRoot && !parts.some(p => p === '--add-dir' || p.startsWith('--add-dir='))) {
+    parts.push('--add-dir', repoRoot)
+  }
+
+  const inheritedEnv = Object.entries(process.env)
+    .filter(([key]) => key.startsWith('ENSEMBLE_') || key.startsWith('NVIDIA_') || key.startsWith('OPENAI_') || key.startsWith('ANTHROPIC_'))
+    .filter(([, value]) => value)
+  const envForward = Object.entries({ ...Object.fromEntries(inheritedEnv), ...readEnsembleConfig().agentEnv })
+    .map(([key, value]) => `export ${key}=${shellEscape(value as string)}`)
+    .join('; ')
+  const envPrefix = envForward ? `${envForward}; ` : ''
+  const unsetEnv = resolveAgentProgram(program).unsetEnv ?? []
+  const unsetPrefix = unsetEnv.length ? `unset ${unsetEnv.join(' ')}; ` : ''
+  return ` nocorrect unset CLAUDECODE; ${envPrefix}${unsetPrefix}${parts.map(shellEscape).join(' ')}`
 }

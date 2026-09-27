@@ -5,15 +5,9 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import path from 'path'
-import { fileURLToPath } from 'url'
-import { readEnsembleConfig } from './ensemble-config'
 import { getRuntime } from './agent-runtime'
 import { getSelfHostId } from './hosts-config'
-import { buildAgentCommandParts, resolveAgentProgram, shellEscape } from './agent-config'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(__dirname, '..')
+import { buildAgentStartupCommand } from './agent-config'
 
 export interface SpawnedAgent {
   id: string
@@ -36,29 +30,6 @@ function computeSessionName(agentName: string): string {
   return agentName.replace(/[^a-zA-Z0-9\-_.]/g, '')
 }
 
-/** Resolve program name to CLI command, adding runtime flags for cwd handling */
-function resolveStartCommand(program: string, cwd: string): string {
-  const parts = buildAgentCommandParts(program)
-  const normalized = program.toLowerCase()
-
-  if (
-    normalized.includes('codex')
-    && !parts.some(p => p === '-C' || p === '--cd' || p.startsWith('--cd='))
-  ) {
-    parts.push('--cd', cwd)
-  }
-
-  if (
-    normalized.includes('claude')
-    && cwd !== REPO_ROOT
-    && !parts.some(p => p === '--add-dir' || p.startsWith('--add-dir='))
-  ) {
-    parts.push('--add-dir', REPO_ROOT)
-  }
-
-  return parts.map(shellEscape).join(' ')
-}
-
 /**
  * Spawn a local agent: create tmux session + start the AI program
  */
@@ -69,8 +40,6 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   const cwd = options.workingDirectory || process.cwd()
   const hostId = options.hostId || getSelfHostId()
 
-  const unsetEnv = resolveAgentProgram(options.program).unsetEnv ?? []
-
   // Create tmux session
   await runtime.createSession(sessionName, cwd)
 
@@ -78,24 +47,8 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   await new Promise(r => setTimeout(r, 300))
 
   // Start the AI program
-  const startCommand = resolveStartCommand(options.program, cwd)
-
-  // Forward ENSEMBLE_* and agent-specific env vars to tmux session
-  const inheritedEnv = Object.entries(process.env)
-    .filter(([k]) => k.startsWith('ENSEMBLE_') || k.startsWith('NVIDIA_') || k.startsWith('OPENAI_') || k.startsWith('ANTHROPIC_'))
-    .filter(([, v]) => v)
-  // Explicit pane exports also reach shells created by an already-running tmux server.
-  const envForward = Object.entries({ ...Object.fromEntries(inheritedEnv), ...readEnsembleConfig().agentEnv })
-    // Ongeescaped ging de waarde als kale toetsaanslagen de pane in: API-sleutels
-    // stonden zo letterlijk in de tmux-scrollback van elke agent.
-    .map(([k, v]) => `export ${k}=${shellEscape(v as string)}`)
-    .join('; ')
-  const envPrefix = envForward ? `${envForward}; ` : ''
-  // Unset after exports so agentEnv cannot restore excluded credentials.
-  const unsetPrefix = unsetEnv.length ? `unset ${unsetEnv.join(' ')}; ` : ''
-
   // Use 'nocorrect' to prevent zsh auto-correct prompt, and add leading space to avoid tmux swallowing first char
-  await runtime.sendKeys(sessionName, ` nocorrect unset CLAUDECODE; ${envPrefix}${unsetPrefix}${startCommand}`, { literal: true, enter: true })
+  await runtime.sendKeys(sessionName, buildAgentStartupCommand(options.program, cwd), { literal: true, enter: true })
 
   console.log(`[Spawner] Agent ${options.name} started in tmux session ${sessionName}`)
 

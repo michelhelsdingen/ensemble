@@ -14,6 +14,7 @@
     "lint": "eslint . --ext .ts",
     "monitor": "tsx cli/monitor.ts --latest",
     "cli": "tsx cli/ensemble.ts",
+    "smoketest": "tsx scripts/agent-smoketest.ts",
     "postinstall": "node ./bin/postinstall.cjs",
     "test": "vitest run"
   },

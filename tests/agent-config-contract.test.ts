@@ -96,9 +96,19 @@ describe('agent config contract', () => {
   })
 
   it('er is maar één shellEscape in de codebase', () => {
-    const spawner = fs.readFileSync(path.resolve(process.cwd(), 'lib/agent-spawner.ts'), 'utf8')
-    assert.ok(!/function shellEscape/.test(spawner), 'agent-spawner.ts mag geen eigen shellEscape meer hebben')
-    assert.match(spawner, /import \{[^}]*shellEscape[^}]*\} from '\.\/agent-config'/)
+    const lib = path.resolve(process.cwd(), 'lib')
+    const definitions = fs.readdirSync(lib)
+      .filter(file => file.endsWith('.ts'))
+      .flatMap(file => {
+        const source = fs.readFileSync(path.join(lib, file), 'utf8')
+        return [...source.matchAll(/\bfunction shellEscape\s*\(/g)].map(() => file)
+      })
+    assert.deepStrictEqual(definitions, ['agent-config.ts'])
+
+    const spawner = fs.readFileSync(path.join(lib, 'agent-spawner.ts'), 'utf8')
+    const smoke = fs.readFileSync(path.resolve(process.cwd(), 'scripts/agent-smoketest.ts'), 'utf8')
+    assert.match(spawner, /import \{[^}]*buildAgentStartupCommand[^}]*\} from '\.\/agent-config'/)
+    assert.match(smoke, /import \{[^}]*buildAgentStartupCommand[^}]*\} from '\.\.\/lib\/agent-config'/)
   })
 
   afterAll(() => {

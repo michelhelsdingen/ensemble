@@ -86,4 +86,7 @@ npm run build     # TypeScript typecheck (no emit)
 npm run lint      # ESLint
 npm run monitor   # Open TUI monitor for latest team
 npm run cli       # Run ensemble CLI
+npm run smoketest # Check agent startup markers in isolated tmux sessions
 ```
+
+The smoketest checks every agent in `agents.json` by default. Missing commands are reported but do not fail the run. To select agents or change the per-agent timeout, use `npm run smoketest -- codex claude --timeout 30`. It prints JSON on stdout and a short summary on stderr. Each agent gets a temporary working directory and a separate tmux socket. No prompt is sent.

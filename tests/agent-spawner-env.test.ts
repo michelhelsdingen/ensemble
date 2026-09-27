@@ -2,12 +2,12 @@ import fs from 'fs'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const SRC = fs.readFileSync(path.resolve(process.cwd(), 'lib/agent-spawner.ts'), 'utf8')
+const SRC = fs.readFileSync(path.resolve(process.cwd(), 'lib/agent-config.ts'), 'utf8')
 
 describe('env-forwarding', () => {
   it('escapet de waarde', () => {
-    expect(SRC).not.toMatch(/export \$\{k\}="\$\{v\}"/)
-    expect(SRC).toMatch(/export \$\{k\}=\$\{shellEscape/)
+    expect(SRC).not.toMatch(/export \$\{key\}="\$\{value\}"/)
+    expect(SRC).toMatch(/export \$\{key\}=\$\{shellEscape\(value/)
   })
 })
 
