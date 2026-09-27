@@ -6,7 +6,12 @@ import { afterAll, expect, it } from 'vitest'
 const root = fs.mkdtempSync(path.resolve('tmp/launch-selection-'))
 const scripts = path.join(root, 'scripts')
 fs.mkdirSync(scripts)
-for (const name of ['collab-launch.sh', 'collab-paths.sh']) fs.copyFileSync(path.resolve('scripts', name), path.join(scripts, name))
+for (const name of ['collab-launch.sh', 'collab-paths.sh', 'agent-config-query.ts']) fs.copyFileSync(path.resolve('scripts', name), path.join(scripts, name))
+const lib = path.join(root, 'lib')
+fs.mkdirSync(lib)
+for (const name of ['agent-config.ts', 'ensemble-config.ts']) fs.copyFileSync(path.resolve('lib', name), path.join(lib, name))
+fs.symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir')
+fs.copyFileSync(path.resolve('package.json'), path.join(root, 'package.json'))
 fs.copyFileSync(path.resolve('agents.json'), path.join(root, 'agents.json'))
 fs.writeFileSync(path.join(scripts, 'collab-preflight.sh'), [
   '#!/bin/bash',
@@ -27,7 +32,8 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 function run(options: {
   agents?: string; template?: string; planExit?: string; override?: string;
   oldOverride?: string; skipPreflight?: boolean; configPlan?: boolean;
-  task?: string; preflightExit?: string; envAgents?: string; noPlan?: boolean
+  task?: string; preflightExit?: string; envAgents?: string; noPlan?: boolean;
+  extraPath?: string; planOutput?: string
 } = {}) {
   const overrideFile = path.join(root, 'override')
   fs.rmSync(overrideFile, { force: true })
@@ -43,10 +49,12 @@ function run(options: {
     encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}`, TMPDIR: root,
       COLLAB_AGENTS: options.envAgents ?? '', COLLAB_SKIP_PREFLIGHT: options.skipPreflight ? '1' : '0',
       COLLAB_OVERRIDE_FILE: overrideFile, COLLAB_WORKTREE: 'team', ENSEMBLE_CONFIG: config,
+      ENSEMBLE_AGENTS_CONFIG: path.join(root, 'agents.json'),
+      ENSEMBLE_AGENTS_EXTRA: options.extraPath ?? process.env.ENSEMBLE_AGENTS_EXTRA,
       ENSEMBLE_PLAN_CMD: options.configPlan || options.noPlan ? '' : plan, ENSEMBLE_URL: 'http://unused.invalid',
       TEST_REQUEST: path.join(root, 'request'), TEST_PAYLOAD: path.join(root, 'payload'),
       TEST_PLAN_TASK: path.join(root, 'plan-task'),
-      TEST_PLAN_OUTPUT: '{"agents":["agy","mimo"],"template":"implement","reason":"capacity"}',
+      TEST_PLAN_OUTPUT: options.planOutput ?? '{"agents":["agy","mimo"],"template":"implement","reason":"capacity"}',
       TEST_PLAN_EXIT: options.planExit ?? '0', TEST_OVERRIDE: options.override ?? '',
       TEST_PREFLIGHT_EXIT: options.preflightExit ?? '0',
     },
@@ -62,6 +70,20 @@ it('uses configured plan agents and template before preflight', () => {
   expect(payload.templateName).toBe('implement')
   expect(payload.worktree).toBe('team')
   expect(result.stdout).toContain('Plan: agents=agy,mimo, template=implement (capacity)')
+})
+
+it('accepts plan agents from the merged user config', () => {
+  const extraPath = path.join(root, 'user-agents.json')
+  fs.writeFileSync(extraPath, JSON.stringify({ custom: {
+    name: 'custom', command: 'custom', flags: [], readyMarker: '>',
+    inputMethod: 'sendKeys', color: 'cyan', icon: '*',
+  } }))
+  const { payload, request } = run({
+    extraPath,
+    planOutput: JSON.stringify({ agents: ['agy', 'custom'], template: 'implement', reason: 'capacity' }),
+  })
+  expect(request).toBe('agy,custom|plan')
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['agy', 'custom'])
 })
 
 it('falls back to the default pair when planning fails', () => {

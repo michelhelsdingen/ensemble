@@ -38,6 +38,8 @@ const LIVE_DOCS = [
 ]
 
 type AgentsConfig = Record<string, { flags: string[] }>
+// These assertions cover shipped agents only. User entries are local and cannot be
+// required to appear in the repository documentation.
 const agents = JSON.parse(read('agents.json')) as AgentsConfig
 
 describe('docs match agents.json', () => {

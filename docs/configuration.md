@@ -14,7 +14,8 @@ nav_order: 3
 | `ENSEMBLE_DATA_DIR` | `~/.ensemble` | Data directory for team persistence |
 | `ENSEMBLE_CORS_ORIGIN` | localhost only | Comma-separated allowed CORS origins |
 | `ENSEMBLE_PROJECT` | auto-detect | Project name for summaries |
-| `ENSEMBLE_AGENTS_CONFIG` | `./agents.json` | Path to custom agents config |
+| `ENSEMBLE_AGENTS_CONFIG` | Project `agents.json` | Path to replacement base agents config |
+| `ENSEMBLE_AGENTS_EXTRA` | `~/.config/ensemble/agents.json` | Path to optional user agents config |
 | `ENSEMBLE_AGENT_FLAGS` | — | Override agent CLI flags |
 | `ENSEMBLE_WATCHDOG_NUDGE_MS` | `90000` | Time (ms) before idle agent nudge |
 | `ENSEMBLE_WATCHDOG_STALL_MS` | `180000` | Time (ms) before stall detection |
@@ -34,7 +35,7 @@ ENSEMBLE_TELEGRAM_CHAT_ID=your-chat-id
 
 ## Agent programs (agents.json)
 
-The `agents.json` file defines which AI agents ensemble can spawn. Located in the project root by default, override with `ENSEMBLE_AGENTS_CONFIG`.
+The project `agents.json` file defines which AI agents ensemble can spawn. `ENSEMBLE_AGENTS_CONFIG` replaces this base list. An optional user file at `~/.config/ensemble/agents.json` is loaded on top; set `ENSEMBLE_AGENTS_EXTRA` to use a different path.
 
 ```json
 {
@@ -96,7 +97,7 @@ The `agents.json` file defines which AI agents ensemble can spawn. Located in th
 
 ### Adding a custom agent
 
-Any CLI tool that reads from stdin and writes to stdout can be an ensemble agent. Add it to `agents.json`:
+Any CLI tool that reads from stdin and writes to stdout can be an ensemble agent. Create `~/.config/ensemble/agents.json`, or set `ENSEMBLE_AGENTS_EXTRA` to another file, with an entry like this:
 
 ```json
 {
@@ -111,6 +112,8 @@ Any CLI tool that reads from stdin and writes to stdout can be an ensemble agent
   }
 }
 ```
+
+New keys are added to the base list. If a key already exists, the user entry replaces the entire base entry, so include every required field. Invalid entries are skipped with a warning, and a missing or unreadable user file leaves the base list available. Changes to either file are picked up without restarting the service. `ENSEMBLE_AGENTS_CONFIG` still replaces the base list before the user file is applied.
 
 The agent must support `team-say` and `team-read` shell commands in its PATH for inter-agent communication.
 

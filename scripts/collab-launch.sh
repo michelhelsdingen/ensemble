@@ -48,9 +48,11 @@ API="${ENSEMBLE_URL:-http://localhost:23000}"
 HOST_ID="${ENSEMBLE_HOST_ID:-local}"
 
 # Resolve a configured plan before preflight so its agents are the ones probed.
+# The query uses the same merged base and user agent config as the server.
 # The task is passed as a positional argument, never interpolated into shell code.
 if [ -z "$AGENTS" ]; then
-  PLAN_RESULT=$(python3 - "$REPO_DIR/agents.json" "$TASK" <<'PY'
+  KNOWN_AGENTS=$("$REPO_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/agent-config-query.ts" keys) || KNOWN_AGENTS='[]'
+  PLAN_RESULT=$(python3 - "$KNOWN_AGENTS" "$TASK" <<'PY'
 import json, os, signal, subprocess, sys
 
 command = os.environ.get('ENSEMBLE_PLAN_CMD', '').strip()
@@ -64,8 +66,7 @@ if not command:
 if not isinstance(command, str) or not command.strip():
     sys.exit(1)
 try:
-    with open(sys.argv[1]) as source:
-        known = set(json.load(source))
+    known = set(json.loads(sys.argv[1]))
     process = subprocess.Popen(
         ['/bin/bash', '-c', command + ' "$@"', 'ensemble-plan', sys.argv[2]],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
@@ -246,7 +247,7 @@ fi
 # through unchanged. Trusting TERM_PROGRAM there opens a real iTerm split
 # outside the layout the user is watching, so the monitor is never seen.
 MONITOR_ENV_PREFIX=""
-for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
+for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
   VALUE="${!KEY:-}"
   if [ -n "$VALUE" ]; then
     MONITOR_ENV_PREFIX+="$KEY=$(printf '%q' "$VALUE") "

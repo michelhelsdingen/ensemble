@@ -18,16 +18,6 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 _AGENT_COLORS_DIR="$(cd "$(dirname "$_AGENT_COLORS_SELF")" 2>/dev/null && pwd)"
 
-if [ -n "${ENSEMBLE_AGENTS_CONFIG:-}" ]; then
-  _AGENTS_JSON="$ENSEMBLE_AGENTS_CONFIG"
-else
-  # scripts/ lives one level below the repo root; check both, in that order.
-  for _candidate in "$_AGENT_COLORS_DIR/../agents.json" "$_AGENT_COLORS_DIR/agents.json"; do
-    if [ -f "$_candidate" ]; then _AGENTS_JSON="$_candidate"; break; fi
-  done
-  : "${_AGENTS_JSON:=$_AGENT_COLORS_DIR/../agents.json}"
-fi
-
 # Named colours from agents.json to ANSI. Bright variants: these are read on a
 # dark terminal all evening.
 _ansi_for_name() {
@@ -52,15 +42,6 @@ agent_color() {
     ensemble|user|michel) printf '\033[97m'; return 0 ;;
   esac
 
-  name=$(python3 - "$_AGENTS_JSON" "$key" <<'PY' 2>/dev/null
-import json,sys
-try:
-    cfg=json.load(open(sys.argv[1]))
-except Exception:
-    print(""); raise SystemExit
-a=cfg.get(sys.argv[2])
-print((a or {}).get("color","") if isinstance(a,dict) else "")
-PY
-  )
+  name="$("$_AGENT_COLORS_DIR/../node_modules/.bin/tsx" "$_AGENT_COLORS_DIR/agent-config-query.ts" color "$key" 2>/dev/null)" || name=''
   _ansi_for_name "${name:-white}"
 }

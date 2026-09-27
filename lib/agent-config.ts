@@ -4,6 +4,7 @@
  */
 
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import type { AgentProgram, AgentsConfig } from '../types/agent-program'
@@ -14,9 +15,57 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let _cache: AgentsConfig | null = null
 let _cacheMtimeMs = 0
 let _cachePath = ''
+let _baseCache: AgentsConfig | null = null
+let _extraCache: AgentsConfig = {}
+let _extraVersion = ''
 
 function agentsConfigPath(): string {
   return process.env['ENSEMBLE_AGENTS_CONFIG'] || path.join(__dirname, '..', 'agents.json')
+}
+
+function extraAgentsConfigPath(): string {
+  return process.env['ENSEMBLE_AGENTS_EXTRA'] || path.join(os.homedir(), '.config', 'ensemble', 'agents.json')
+}
+
+function validUnsetEnv(agent: Record<string, unknown>): boolean {
+  return agent.unsetEnv === undefined || (
+    Array.isArray(agent.unsetEnv)
+    && agent.unsetEnv.every(name => typeof name === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(name))
+  )
+}
+
+function validExtraAgent(agent: unknown): agent is AgentProgram {
+  if (!agent || typeof agent !== 'object' || Array.isArray(agent)) return false
+  const value = agent as Record<string, unknown>
+  return typeof value.name === 'string' && typeof value.command === 'string'
+    && Array.isArray(value.flags) && value.flags.every(flag => typeof flag === 'string')
+    && typeof value.readyMarker === 'string'
+    && (value.inputMethod === 'sendKeys' || value.inputMethod === 'pasteFromFile')
+    && typeof value.color === 'string' && typeof value.icon === 'string'
+    && validUnsetEnv(value)
+}
+
+function loadExtraConfig(configPath: string, version: string): AgentsConfig {
+  if (_extraVersion === version) return _extraCache
+  const extra: AgentsConfig = {}
+  let invalid = false
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      invalid = true
+    } else {
+      for (const [key, agent] of Object.entries(parsed)) {
+        if (key === '__proto__' || !validExtraAgent(agent)) invalid = true
+        else Object.defineProperty(extra, key, { value: agent, enumerable: true, configurable: true, writable: true })
+      }
+    }
+  } catch {
+    invalid = true
+  }
+  if (invalid) console.warn(`Ignoring invalid agent entries in ${configPath}`)
+  _extraCache = extra
+  _extraVersion = version
+  return extra
 }
 
 /**
@@ -36,24 +85,38 @@ export function loadAgentsConfig(): AgentsConfig {
     mtimeMs = fs.statSync(configPath).mtimeMs
   } catch {
     // Unreadable now: keep serving the last good config rather than crashing.
-    if (_cache) return _cache
+    if (!_baseCache) throw new Error(`Cannot read agents config: ${configPath}`)
   }
 
-  if (_cache && configPath === _cachePath && mtimeMs === _cacheMtimeMs) return _cache
-
-  const raw = fs.readFileSync(configPath, 'utf-8')
-  const config = JSON.parse(raw) as AgentsConfig
-  for (const [key, agent] of Object.entries(config)) {
-    if (agent.unsetEnv !== undefined && (
-      !Array.isArray(agent.unsetEnv)
-      || !agent.unsetEnv.every(name => typeof name === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(name) && !/[\r\n]/.test(name))
-    )) {
-      throw new Error(`Invalid unsetEnv for agent "${key}": expected uppercase environment variable names`)
+  const baseChanged = !_baseCache || configPath !== _cachePath || (mtimeMs && mtimeMs !== _cacheMtimeMs)
+  if (baseChanged) {
+    const raw = fs.readFileSync(configPath, 'utf-8')
+    const config = JSON.parse(raw) as AgentsConfig
+    for (const [key, agent] of Object.entries(config)) {
+      if (!validUnsetEnv(agent as unknown as Record<string, unknown>)) {
+        throw new Error(`Invalid unsetEnv for agent "${key}": expected uppercase environment variable names`)
+      }
     }
+    _baseCache = config
+    _cacheMtimeMs = mtimeMs
+    _cachePath = configPath
   }
-  _cache = config
-  _cacheMtimeMs = mtimeMs
-  _cachePath = configPath
+
+  const extraPath = extraAgentsConfigPath()
+  let extraVersion: string
+  try {
+    const stat = fs.statSync(extraPath)
+    extraVersion = `${extraPath}:${stat.mtimeMs}:${stat.size}`
+  } catch {
+    extraVersion = `${extraPath}:missing`
+  }
+  if (_cache && !baseChanged && extraVersion === _extraVersion) return _cache
+  const extra = extraVersion.endsWith(':missing') ? {} : loadExtraConfig(extraPath, extraVersion)
+  if (extraVersion.endsWith(':missing')) {
+    _extraCache = {}
+    _extraVersion = extraVersion
+  }
+  _cache = { ..._baseCache, ...extra }
   return _cache
 }
 
@@ -62,6 +125,9 @@ export function clearAgentsConfigCache(): void {
   _cache = null
   _cacheMtimeMs = 0
   _cachePath = ''
+  _baseCache = null
+  _extraCache = {}
+  _extraVersion = ''
 }
 
 /** Agent keys that actually exist, for error messages and pickers. */

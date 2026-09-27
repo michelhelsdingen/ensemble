@@ -16,6 +16,7 @@ export default defineConfig({
       COLLAB_RUNTIME_ROOT: path.join(temporary, 'test-runtime'),
       ENSEMBLE_DATA_DIR: path.join(temporary, 'data'),
       ENSEMBLE_CONFIG: path.join(temporary, 'absent-config.json'),
+      ENSEMBLE_AGENTS_EXTRA: path.join(temporary, 'absent-agents.json'),
       ENSEMBLE_ROSTER_CMD: '',
       ENSEMBLE_PLAN_CMD: '',
       ENSEMBLE_EVENTS_CMD: '',

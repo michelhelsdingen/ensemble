@@ -106,7 +106,11 @@ The default team is **Codex (lead) + Claude Code (worker)**. This is the tested,
 | **Gemini CLI** | Legacy | Configuration retained |
 | **MiMo Code CLI** | Configured | Add explicitly as `mimo` |
 | **opencode** | Untested | Add explicitly (see below) |
-| **Any CLI tool** | Via `agents.json` | [Add a custom agent](https://michelhelsdingen.github.io/ensemble/configuration#adding-a-custom-agent) |
+| **Any CLI tool** | Via `~/.config/ensemble/agents.json` or `ENSEMBLE_AGENTS_EXTRA` | [Add a custom agent](docs/configuration.md#adding-a-custom-agent) |
+
+### Add a custom agent
+
+Create `~/.config/ensemble/agents.json` with your agent entry. Set `ENSEMBLE_AGENTS_EXTRA` if you want to keep that file elsewhere. New keys are added, and an existing key replaces the complete shipped entry. The project `agents.json` stays unchanged. See the [configuration guide](docs/configuration.md#adding-a-custom-agent) for the required fields and an example.
 
 ### Using a different team composition
 
