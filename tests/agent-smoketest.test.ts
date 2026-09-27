@@ -54,7 +54,7 @@ describe.skipIf(!hasTmux)('agent smoketest with isolated tmux sockets', () => {
   })
 
   it('reports ready, missing, timeout and crash without a real AI CLI', async () => {
-    const { code, stdout, stderr } = await run(['ready', 'waiting', 'broken', 'absent'])
+    const { code, stdout, stderr } = await run(['ready', 'waiting', 'broken', 'absent'], 3)
     expect(code).toBe(1)
     const results = JSON.parse(stdout)
     expect(results.ready.status).toBe('ok')
