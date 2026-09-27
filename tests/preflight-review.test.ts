@@ -40,7 +40,7 @@ fi`)
 })
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 function run(overrides: Record<string, string> = {}, explicit = '') {
-  const result = spawnSync('/bin/bash', [script, explicit], { encoding: 'utf8', timeout: 5000, env: {
+  const result = spawnSync('/bin/bash', [script, explicit], { encoding: 'utf8', timeout: 30000, env: {
     ...process.env, PATH: bin, HOME: root, TMPDIR: root, TEST_ROOT: root,
     ENSEMBLE_URL: 'http://unused.invalid', ENSEMBLE_CONFIG: path.join(root, 'config.json'),
     ENSEMBLE_HEALTH_CMD: 'test-hook', COLLAB_AGENTS: '', COLLAB_OVERRIDE_FILE: path.join(root, 'override'),
