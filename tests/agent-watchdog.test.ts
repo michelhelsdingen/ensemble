@@ -179,9 +179,9 @@ describe('AgentWatchdog', () => {
     watchdog.stop()
   })
 
-  it('leaves a finished agent alone even after later team messages', async () => {
+  it.each(['<<COLLAB_DONE>>', 'Tests complete. <<COLLAB_DONE>>', 'Conclusion\n<<COLLAB_DONE>>\n  '])('leaves a finished agent alone after terminal marker %j', async content => {
     const watchdog = createWatchdog()
-    messages.push(makeMessage({ content: '<<COLLAB_DONE>>' }))
+    messages.push(makeMessage({ content }))
     messages.push(makeMessage({ from: 'other-agent', content: 'Still checking' }))
     try {
       nowMs += 91_000

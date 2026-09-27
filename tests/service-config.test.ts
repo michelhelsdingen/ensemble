@@ -116,7 +116,7 @@ it('requires new information and no outstanding questions, without an approval l
   expect(prompt).toContain('EXACTLY the sentinel <<COLLAB_DONE>>')
   expect(prompt).not.toContain('confirmed agreement')
 })
-it('invalidates a sentinel when another agent posts new content and requires a fresh sentinel', async () => {
+it('preserves completion when another agent posts content before finishing', async () => {
   const post = (from: string, content: string, seconds: number) => messages.push({
     id: `review-${messages.length}`, teamId: current!.id, from, to: 'team', content,
     type: 'chat', timestamp: new Date(start + seconds * 1000).toISOString(),
@@ -127,12 +127,9 @@ it('invalidates a sentinel when another agent posts new content and requires a f
   post('beta', '<<COLLAB_DONE>>', 4)
   vi.setSystemTime(start + 5_000)
   await service.checkIdleTeams()
-  expect(current!.status).toBe('active')
-  post('alpha', '<<COLLAB_DONE>>', 5)
-  await service.checkIdleTeams()
   expect(current!.status).toBe('disbanded')
 })
-it('requires a sentinel strictly later than another agent content even at equal timestamps', async () => {
+it('accepts completion from all agents even at equal timestamps', async () => {
   messages.push(...[
     { from: 'alpha', content: '<<COLLAB_DONE>>' },
     { from: 'beta', content: 'Check the fallback result' },
@@ -140,7 +137,7 @@ it('requires a sentinel strictly later than another agent content even at equal 
   ].map((m, i) => ({ ...m, id: `same-${i}`, teamId: current!.id, to: 'team', type: 'chat' as const, timestamp: new Date(start + 1000).toISOString() })))
   vi.setSystemTime(start + 2000)
   await service.checkIdleTeams()
-  expect(current!.status).toBe('active')
+  expect(current!.status).toBe('disbanded')
 })
 it('instructs agents to answer new content after a sentinel and send it again', () => {
   const prompt = service.buildPromptPreview({ teamId: 'sample', teamName: 'sample', description: 'Inspect code', agentName: 'alpha', teammateNames: ['beta'], agentIndex: 0 })
@@ -177,7 +174,7 @@ it('makes the time limit the primary summary reason even when agents never poste
   expect(summary).not.toContain('points at prompt delivery')
   expect(summary).toContain('Messages: 0')
 })
-it('ends an idle all-sentinel team below ten messages despite later system chatter', async () => {
+it('ends an all-sentinel team immediately despite later system chatter', async () => {
   const post = (from: string, content: string, seconds: number) => messages.push({
     id: `idle-${messages.length}`, teamId: current!.id, from, to: 'team', content,
     type: 'chat', timestamp: new Date(start + seconds * 1000).toISOString(),
@@ -185,11 +182,8 @@ it('ends an idle all-sentinel team below ten messages despite later system chatt
   post('alpha', '<<COLLAB_DONE>>', 1)
   post('beta', 'Finished checking; waiting for alpha', 2)
   post('beta', '<<COLLAB_DONE>>', 3)
-  post('ensemble', 'Watchdog status update', 302)
-  vi.setSystemTime(start + 303_000)
-  await service.checkIdleTeams()
-  expect(current!.status).toBe('active')
-  vi.setSystemTime(start + 303_001)
+  post('ensemble', 'Watchdog status update', 4)
+  vi.setSystemTime(start + 4_000)
   await service.checkIdleTeams()
   expect(current!.status).toBe('disbanded')
 })

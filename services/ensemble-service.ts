@@ -4,6 +4,7 @@
  * Uses agent-spawner.ts for local/remote agent lifecycle.
  */
 
+import { EXPLICIT_DONE_SENTINEL, isExplicitDone } from '../lib/explicit-done'
 import { v4 as uuidv4 } from 'uuid'
 import type { EnsembleTeam, EnsembleMessage, CreateTeamRequest, CollabTemplatesFile } from '../types/ensemble'
 import {
@@ -63,10 +64,8 @@ const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 480_000
 const TWO_SIGNAL_IDLE_THRESHOLD_MS = 300_000
 const MIN_MESSAGES_BEFORE_AUTO_DISBAND = 10
-// Explicit sentinel: when every active agent sends this exact marker as a full
-// message, the team auto-disbands immediately — no idle wait, no minimum
-// message count. Agents are instructed to use it in buildPromptPreview.
-const EXPLICIT_DONE_SENTINEL = '<<COLLAB_DONE>>'
+// A terminal sentinel from every active agent ends the team without an idle
+// wait or minimum message count. Prompts prefer a separate marker message.
 const COMPLETION_PATTERNS = [
   /(?:^|[^\p{L}\p{N}_])afgerond(?:[^\p{L}\p{N}_]|$)/iu,
   /(?:^|[^\p{L}\p{N}_])\bdone\b(?![.\w])/iu,
@@ -284,15 +283,32 @@ class EnsembleService {
     for (const id of this.deadlineWarnings.keys()) {
       if (!activeIds.has(id)) this.deadlineWarnings.delete(id)
     }
+    const activeAgentKeys = new Set(teams.flatMap(team =>
+      team.agents.filter(agent => agent.status === 'active').map(agent => `${team.id}:${agent.name}`),
+    ))
+    for (const key of this.doneEvents.keys()) {
+      if (!activeAgentKeys.has(key)) this.doneEvents.delete(key)
+    }
     const config = readEnsembleConfig()
     for (const team of teams) {
       if (this.disbandingTeams.has(team.id)) continue
       try {
+        const messages = getMessages(team.id)
         for (const agent of team.agents.filter(a => a.status === 'active')) {
-          const last = [...getMessages(team.id)].reverse().find(m => m.from === agent.name)
           const key = `${team.id}:${agent.name}`
-          if (last?.content.trim() === EXPLICIT_DONE_SENTINEL && this.doneEvents.get(key) !== last.id) {
-            this.doneEvents.set(key, last.id)
+          // The first marker after ordinary content identifies a completion run.
+          // Repeated markers retain that identity, even across multiple polls.
+          let completionId: string | undefined
+          for (const message of messages) {
+            if (message.from !== agent.name) continue
+            completionId = isExplicitDone(message.content)
+              ? completionId ?? message.id
+              : undefined
+          }
+          if (completionId === undefined) {
+            this.doneEvents.delete(key)
+          } else if (this.doneEvents.get(key) !== completionId) {
+            this.doneEvents.set(key, completionId)
             teamEvent(team, 'agent_done', { agent: agent.name })
           }
         }
@@ -349,7 +365,7 @@ class EnsembleService {
             teamId: team.id,
             from: 'ensemble',
             to: 'team',
-            content: 'Auto-disband triggered after 60s idle and completion-like agent messages',
+            content: 'Auto-disband triggered by agent completion or idle fallback',
             type: 'chat',
             timestamp: new Date().toISOString(),
           })
@@ -378,33 +394,13 @@ class EnsembleService {
     const lastMessage = nonEnsembleMessages[nonEnsembleMessages.length - 1]
     if (!lastMessage) return false
 
-    // Every active agent must finish after the latest content from other agents.
-    // Another sentinel is only a completion marker, so it does not reopen work.
-    const contentMessages = messages.filter(m => activeNames.has(m.from) && m.content.trim() !== EXPLICIT_DONE_SENTINEL)
-    const sentinelSenders = new Set(
-      messages
-        .filter(m => activeNames.has(m.from) && m.content.trim() === EXPLICIT_DONE_SENTINEL)
-        .filter(m => {
-          const sentAt = Date.parse(m.timestamp)
-          return Number.isFinite(sentAt) && contentMessages.every(other =>
-            other.from === m.from || sentAt > Date.parse(other.timestamp),
-          )
-        })
-        .map(m => m.from),
-    )
-    if (activeNames.size > 0 && sentinelSenders.size >= activeNames.size) return true
-
-    // Last own sentinels also close a quiet team when status chatter invalidated
-    // the immediate completion path. System messages do not reset agent idle time.
+    // Only an agent's own ordinary message reopens its completed work.
     const latestAgentMessages = [...activeNames].map(name =>
       [...messages].reverse().find(message => message.from === name),
     )
     if (latestAgentMessages.length > 0 && latestAgentMessages.every(message =>
-      message?.content.trim() === EXPLICIT_DONE_SENTINEL && Number.isFinite(Date.parse(message.timestamp)),
-    )) {
-      const lastAgentTimestamp = Math.max(...latestAgentMessages.map(message => Date.parse(message!.timestamp)))
-      if (Date.now() - lastAgentTimestamp > TWO_SIGNAL_IDLE_THRESHOLD_MS) return true
-    }
+      message !== undefined && isExplicitDone(message.content),
+    )) return true
 
     // Don't auto-disband until agents have exchanged enough messages
     if (nonEnsembleMessages.length < MIN_MESSAGES_BEFORE_AUTO_DISBAND) return false
@@ -432,7 +428,7 @@ class EnsembleService {
     // Wording alone never ends a live session. Agents say "klaar" about a
     // sub-step, and even a tentative closure proposal ("I think
     // we're done because X") is itself a match. Killing on that costs a trio its
-    // third agent mid-task. The exact sentinel above is the fast path; these
+    // third agent mid-task. The terminal sentinel above is the fast path; these
     // patterns are only a safety net for teams that go quiet without sending it.
     if (idleForMs <= TWO_SIGNAL_IDLE_THRESHOLD_MS) return false
     if (this.hasTwoRecentCompletionSignals(completionSignals)) return true
@@ -670,7 +666,7 @@ export function buildPromptPreview(params: {
       `Read the feed for user instructions: ${teamReadCmd}`,
       `DONE PROTOCOL:`,
       `Complete and verify the task, then report your results, conclusions, and any remaining limitations via team-say.`,
-      `Only after that, send a FINAL team-say whose message is EXACTLY <<COLLAB_DONE>> (nothing else). This ends the team and preserves the summary.`,
+      `Only after that, send a FINAL team-say whose message is EXACTLY <<COLLAB_DONE>> (nothing else). A terminal sentinel is accepted, but a separate message is preferred. This ends the team and preserves the summary.`,
       `Start NOW: share your plan with team-say, then carry out the task independently.`,
     ].join(' ')
   }
@@ -682,7 +678,6 @@ export function buildPromptPreview(params: {
   const mateList = solo
     ? params.teammateNames[0]
     : params.teammateNames.slice(0, -1).join(', ') + ' and ' + params.teammateNames[mateCount - 1]
-  const agentTotal = mateCount + 1
 
   let roleInstructions: string[]
 
@@ -727,7 +722,7 @@ export function buildPromptPreview(params: {
     `6. Keep alternating: analyze, share, read, respond, analyze`,
     `DONE PROTOCOL (important):`,
     `7. When your work is complete and there is no unanswered teammate content or question after your last message, report the conclusion and send a FINAL team-say whose message is EXACTLY the sentinel <<COLLAB_DONE>> (nothing else, no quotes, no prose). Do not send status messages without new information, do not wait for an approval that may never come, and do not leave open questions addressed to you unresolved.`,
-    `8. The team auto-disbands only after all ${agentTotal} agents have sent <<COLLAB_DONE>>. If new teammate content arrives after your sentinel, respond substantively and send the sentinel again once your work is complete and all questions addressed to you are resolved.`,
+    `8. The team auto-disbands once every active agent has ended its latest message with <<COLLAB_DONE>>; a separate sentinel message is preferred. Only your own ordinary message reopens your completion state. Do not send a sentinel while awaiting a reply to a question. If new teammate content arrives after your sentinel, respond substantively and send the sentinel again once your work is complete and all questions addressed to you are resolved.`,
     `9. Before sending <<COLLAB_DONE>>, make sure the important conclusions (recommendation, rationale, build list, layout, decisions) are actually present as long team-say messages in the transcript — that is what the summary will preserve. Do not keep insights only in your head.`,
     `Start NOW: greet your teammate with team-say, then begin.`,
   ].join(' ')
@@ -1417,8 +1412,11 @@ export async function disbandTeam(teamId: string, failureReason?: string, finish
   })
 
   const finishedMessages = getMessages(teamId)
-  const remaining = team.agents.filter(a => a.status !== 'failed' && a.status !== 'replaced')
-  const allDone = remaining.length > 0 && remaining.every(a => [...finishedMessages].reverse().find(m => m.from === a.name)?.content.trim() === EXPLICIT_DONE_SENTINEL)
+  const remaining = team.agents.filter(a => a.status === 'active')
+  const allDone = remaining.length > 0 && remaining.every(a => {
+    const last = [...finishedMessages].reverse().find(m => m.from === a.name)
+    return last !== undefined && isExplicitDone(last.content)
+  })
   teamEvent(team, 'team_finished', { status: finishStatus ?? (failureReason ? (failureReason.startsWith('team stopped on time limit') ? 'stopped' : 'failed') : allDone ? 'ok' : 'stopped'), durationS: Math.max(0, (Date.now() - Date.parse(team.createdAt)) / 1000), branch: team.worktreeBranch, cwd: team.worktreePath || team.workingDirectory, detail: failureReason })
 
   // Soft cleanup: remove ephemeral files, keep messages/summary/log, write .finished marker

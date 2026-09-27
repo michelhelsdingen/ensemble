@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const CLEANUP = path.resolve(process.cwd(), 'scripts/collab-cleanup.sh')
 const PATHS = path.resolve(process.cwd(), 'scripts/collab-paths.sh')
+// Process termination includes escalation polling and child exit delivery.
+const PROCESS_STOP_TIMEOUT_MS = 15_000
 const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 3600 * 1000)
 
 function run(root: string, ...args: string[]): string {
@@ -131,7 +133,7 @@ describe('collab-cleanup.sh abandoned directories', () => {
     run(root, '--force')
     expect(await waitDead(bridge, 3000), 'bridge moet gestopt zijn').toBe(true)
     expect(await waitDead(poller, 3000), 'poller moet gestopt zijn').toBe(true)
-  })
+  }, PROCESS_STOP_TIMEOUT_MS)
 
   it('escaleert naar KILL als het proces SIGTERM negeert', async () => {
     const dir = path.join(root, 'team-stubborn')
@@ -140,7 +142,7 @@ describe('collab-cleanup.sh abandoned directories', () => {
     fs.writeFileSync(path.join(dir, 'bridge.pid'), String(bridge.pid))
     stopTeamProcesses(dir)
     expect(await waitDead(bridge, 3000), 'een proces dat TERM negeert moet alsnog gekilld worden').toBe(true)
-  })
+  }, PROCESS_STOP_TIMEOUT_MS)
 
   it('killt geen proces waarvan de pid inmiddels iets anders is', () => {
     // Een pid-bestand van dagen oud kan naar een heel ander proces wijzen: het
@@ -178,7 +180,7 @@ describe('collab-cleanup.sh abandoned directories', () => {
     } finally {
       bridge.kill('SIGKILL')
     }
-  })
+  }, PROCESS_STOP_TIMEOUT_MS)
 
   it('laat een proces van een ander team met rust, ook zonder pid-bestand', async () => {
     const dir = path.join(root, 'team-orphan-2')

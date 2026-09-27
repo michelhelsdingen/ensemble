@@ -1,3 +1,4 @@
+import { isExplicitDone } from './explicit-done'
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
@@ -170,7 +171,7 @@ export class AgentWatchdog {
     for (const agent of activeAgents) {
       const stateKey = `${team.id}:${agent.name}`
       const lastAgentMessage = [...messages].reverse().find(message => message.from === agent.name)
-      if (lastAgentMessage?.content.trim() === '<<COLLAB_DONE>>') {
+      if (lastAgentMessage && isExplicitDone(lastAgentMessage.content)) {
         this.state.delete(stateKey)
         this.remoteAbsences.delete(stateKey)
         continue
