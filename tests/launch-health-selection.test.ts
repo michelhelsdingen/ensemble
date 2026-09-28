@@ -70,6 +70,7 @@ it('uses configured plan agents and template before preflight', () => {
   expect(payload.templateName).toBe('implement')
   expect(payload.worktree).toBe('team')
   expect(result.stdout).toContain('Plan: agents=agy,mimo, template=implement (capacity)')
+  expect(result.stdout).not.toContain('Auto-fallback')
 })
 
 it('accepts plan agents from the merged user config', () => {
@@ -119,9 +120,26 @@ it('does not call the plan for COLLAB_AGENTS and keeps fallback enabled', () => 
 })
 
 it('uses preflight fallback for planned agents', () => {
-  const { payload, request } = run({ override: 'mimo' })
+  const { payload, request, result } = run({ override: 'mimo' })
   expect(request).toBe('agy,mimo|plan')
   expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['mimo'])
+  expect(result.stdout).toContain('Auto-fallback: agy,mimo -> mimo (zie preflight)')
+  expect(result.stdout).not.toContain('Auto-fallback aktief')
+})
+
+it('does not print a fallback line when preflight keeps plan agents', () => {
+  const { result } = run({ configPlan: true, override: 'agy,mimo' })
+  expect(result.stdout).not.toContain('Auto-fallback')
+})
+
+it('prints the change when preflight replaces a plan agent', () => {
+  const { result } = run({
+    configPlan: true,
+    planOutput: JSON.stringify({ agents: ['codex', 'mimo'], template: 'implement', reason: 'capacity' }),
+    override: 'agy,mimo',
+  })
+  expect(result.stdout).toContain('Auto-fallback: codex -> agy (zie preflight)')
+  expect(result.stdout).not.toContain('Auto-fallback aktief')
 })
 
 it('ignores an old override when this run writes none', () => {

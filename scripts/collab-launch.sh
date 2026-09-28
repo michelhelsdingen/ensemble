@@ -133,6 +133,7 @@ fi
 # ─── 1b. Preflight checks (auth + DNS + service age) ───
 # Skip with COLLAB_SKIP_PREFLIGHT=1 if needed.
 # Pass the requested agents so preflight only checks the CLIs this run needs.
+PREFLIGHT_INPUT_AGENTS="$AGENTS"
 if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
   if COLLAB_AGENTS_SOURCE="$AGENTS_SOURCE" "$SCRIPT_DIR/collab-preflight.sh" "$AGENTS" 2>&1 | sed 's/^/  /'; then
     :
@@ -146,9 +147,32 @@ if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
 fi
 
 if [ "$AGENTS_SOURCE" != "explicit" ] && [ -f "$OVERRIDE_FILE" ]; then
-  AGENTS=$(cat "$OVERRIDE_FILE" 2>/dev/null || echo "")
-  if [ -n "$AGENTS" ]; then
-    echo -e "  \033[93m!\033[0m Auto-fallback aktief: agents=$AGENTS (zie preflight)"
+  OVERRIDE_AGENTS=$(cat "$OVERRIDE_FILE" 2>/dev/null || echo "")
+  if [ -n "$OVERRIDE_AGENTS" ]; then
+    AGENTS="$OVERRIDE_AGENTS"
+    FALLBACK_DIFF=$(python3 - "${PREFLIGHT_INPUT_AGENTS:-codex,claude}" "$OVERRIDE_AGENTS" <<'PY'
+import sys
+
+def normalize(s):
+    return [x.strip().lower() for x in s.split(',') if x.strip()]
+
+before = normalize(sys.argv[1])
+after = normalize(sys.argv[2])
+
+if before != after:
+    removed = [a for a in before if a not in after]
+    added = [a for a in after if a not in before]
+    if removed and len(removed) == len(added):
+        print(', '.join(f"{r} -> {a}" for r, a in zip(removed, added)))
+    elif before and after:
+        print(f"{','.join(before)} -> {','.join(after)}")
+    else:
+        print(','.join(after))
+PY
+    ) || FALLBACK_DIFF=""
+    if [ -n "$FALLBACK_DIFF" ]; then
+      echo -e "  \033[93m!\033[0m Auto-fallback: $FALLBACK_DIFF (zie preflight)"
+    fi
   fi
 fi
 
