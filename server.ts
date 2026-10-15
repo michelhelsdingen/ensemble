@@ -11,7 +11,9 @@ import nodePath from 'path'
 import {
   createEnsembleTeam, getEnsembleTeam, listEnsembleTeams,
   getTeamFeed, sendTeamMessage, disbandTeam,
+  COLLAB_TEMPLATES_PATH,
 } from './services/ensemble-service'
+import { checkRuntimeHealth } from './lib/runtime-health'
 
 const PORT = parseInt(process.env.ENSEMBLE_PORT || process.env.ORCHESTRA_PORT || '23000', 10)
 const HOST = process.env.ENSEMBLE_HOST || '127.0.0.1'
@@ -145,11 +147,18 @@ const server = http.createServer(async (req, res) => {
       // of de service bij de opslag kan, niet of het token daarin nog geldig is.
       // Die laatste vraag beantwoorden de live probes in de preflight.
       const credentialStore = (hasClaudeCreds || hasCodexCreds) ? 'readable' : 'unreachable'
+      const runtimeHealth = checkRuntimeHealth({
+        execPath: process.execPath,
+        templatesPath: COLLAB_TEMPLATES_PATH,
+        exists: fs.existsSync,
+        readFile: file => { fs.readFileSync(file) },
+      })
       return json(res, {
         status: 'healthy',
         version: '1.0.0',
         credentialStore,
         uptimeSeconds: Math.round(process.uptime()),
+        ...runtimeHealth,
       }, 200, origin)
     }
 

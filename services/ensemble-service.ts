@@ -39,6 +39,7 @@ import { emitEvent, runPlan, type BrainEvent } from '../lib/brain-hooks'
 import { replaceTeamAgent, stopTeamReplacements } from '../lib/agent-replacement'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+export const COLLAB_TEMPLATES_PATH = path.join(__dirname, '..', 'collab-templates.json')
 
 interface ServiceResult<T> {
   data?: T
@@ -642,8 +643,7 @@ async function routeToHost(_program: string, preferredHostId?: string): Promise<
 export function loadCollabTemplate(templateName?: string): CollabTemplatesFile['templates'][string] | undefined {
   if (!templateName) return undefined
   try {
-    const templatesPath = path.join(__dirname, '..', 'collab-templates.json')
-    const raw = fs.readFileSync(templatesPath, 'utf-8')
+    const raw = fs.readFileSync(COLLAB_TEMPLATES_PATH, 'utf-8')
     const data: CollabTemplatesFile = JSON.parse(raw)
     const template = data.templates[templateName]
     if (!template) {

@@ -16,6 +16,7 @@
 #   5 — DNS/network issue
 #   6 — grok CLI broken (auth or binary issue)
 #   7 - health hook reports unavailable requested agents or no healthy replacement
+#   8 - service runtime cannot spawn agents safely
 #
 # Each failure prints exactly what's wrong + the fix command.
 
@@ -223,6 +224,65 @@ if [ -n "$SERVER_PID" ]; then
 else
   warn "Could not find the server process — stale-service check skipped"
 fi
+fi
+
+# ─── 2b. Service runtime (verschaald binary, regressie van 2026-10-15) ───
+runtime_health() {
+  curl -sf "$API/api/v1/health" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if not isinstance(data.get("spawnReady"), bool) or data.get("executable") not in ("present", "missing") or data.get("repoRead") not in ("readable", "unreachable"):
+        print("old")
+    else:
+        detail = str(data.get("detail", "")).replace("|", "/").replace("\n", " ")
+        print("{}|{}|{}|{}".format(str(data["spawnReady"]).lower(), data["executable"], data["repoRead"], detail))
+except (ValueError, TypeError, AttributeError):
+    print("old")
+' 2>/dev/null || echo old
+}
+
+RUNTIME_STATE=$(runtime_health)
+IFS='|' read -r SPAWN_READY EXECUTABLE REPO_READ RUNTIME_DETAIL <<< "$RUNTIME_STATE"
+if [ "$SPAWN_READY" = old ]; then
+  warn "Service draait nog de oude health zonder runtime-velden; herstart de service na de uitrol"
+elif [ "$SPAWN_READY" = true ]; then
+  ok "Service runtime klaar om agents te spawnen"
+else
+  TEAMS_JSON=$(curl -sf "$API/api/ensemble/teams" 2>/dev/null || echo "")
+  TEAM_STATE=$(printf '%s' "$TEAMS_JSON" | python3 -c '
+import json, sys
+try:
+    teams = json.load(sys.stdin)["teams"]
+    print("active" if any(team.get("status") == "active" for team in teams) else "none")
+except (ValueError, TypeError, KeyError, AttributeError):
+    print("unknown")
+' 2>/dev/null || echo unknown)
+  if [ "$TEAM_STATE" = active ]; then
+    fail 8 "Service draait op een verwijderd binary of kan de repo niet lezen (executable=$EXECUTABLE, repoRead=$REPO_READ, detail=${RUNTIME_DETAIL:-geen}). Er loopt nog een actief team; eerst dat team ontbinden en daarna preflight opnieuw draaien. De service niet herstarten zolang teamstate in het geheugen staat."
+  fi
+  if [ "$TEAM_STATE" != none ]; then
+    fail 8 "Service runtime onbruikbaar (executable=$EXECUTABLE, repoRead=$REPO_READ, detail=${RUNTIME_DETAIL:-geen}). Teamstatus kon niet worden gecontroleerd; herstart niet zolang een actief team mogelijk is."
+  fi
+
+  LAUNCHD_LABEL="${ENSEMBLE_LAUNCHD_LABEL:-dev.ensemble.server}"
+  LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
+  warn "Service runtime onbruikbaar (executable=$EXECUTABLE, repoRead=$REPO_READ, detail=${RUNTIME_DETAIL:-geen}); herstarten via launchd ($LAUNCHD_LABEL)"
+  if ! launchctl kickstart -k "$LAUNCHD_TARGET"; then
+    fail 8 "Service herstart mislukt (executable=$EXECUTABLE, repoRead=$REPO_READ, detail=${RUNTIME_DETAIL:-geen}). Dit volgt meestal op een brew upgrade van node; herstart de service handmatig."
+  fi
+  RUNTIME_READY=0
+  for _ in $(seq 1 20); do
+    sleep 1
+    RUNTIME_STATE=$(runtime_health)
+    IFS='|' read -r SPAWN_READY EXECUTABLE REPO_READ RUNTIME_DETAIL <<< "$RUNTIME_STATE"
+    if [ "$SPAWN_READY" = true ]; then RUNTIME_READY=1; break; fi
+  done
+  if [ "$RUNTIME_READY" = 1 ]; then
+    ok "Service herstart na verschaald binary; runtime klaar om agents te spawnen"
+  else
+    fail 8 "Service na 20s nog niet spawnklaar (executable=${EXECUTABLE:-onbekend}, repoRead=${REPO_READ:-onbekend}, detail=${RUNTIME_DETAIL:-geen}). Dit volgt meestal op een brew upgrade van node; herstart de service handmatig."
+  fi
 fi
 
 # ─── 3. DNS reachability ───

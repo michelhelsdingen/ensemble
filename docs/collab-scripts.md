@@ -120,6 +120,15 @@ to do that while any `collab-*` tmux session is running: that kill would take a 
 down with it. Finish or disband those teams first, or run `tmux kill-server` yourself once
 they're clear.
 
+A `brew upgrade` of node deletes the Cellar directory the running service was started from.
+The process keeps going on a binary that is no longer on disk, macOS can then no longer
+revalidate its code signature, and every read under a protected folder returns `EPERM` with
+no other symptom. Health stayed green because it only checks the credential store, which
+lives outside those folders, so the team was created before anything failed. Preflight now
+asks the service whether its own `execPath` still exists and whether it can really read the
+repo, and restarts it through launchd when it cannot. It refuses to restart while a team is
+active, because team state lives in the service's memory: disband that team first.
+
 | Exit | Meaning |
 |---|---|
 | 0 | Safe to launch |
@@ -130,6 +139,7 @@ they're clear.
 | 5 | DNS/network issue |
 | 6 | Grok CLI broken |
 | 7 | Health hook reports a selected agent down or limited, with no permitted healthy fallback |
+| 8 | Service runtime cannot spawn agents: it runs a deleted binary or cannot read the repo |
 
 ---
 
