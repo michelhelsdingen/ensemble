@@ -269,8 +269,11 @@ fi
 #   4. iTerm split: on macOS when iTerm2 is the active terminal (or forced)
 #   5. tmux detached session: cross-platform fallback
 #
-# herdr and Orca own their panes. Check them before iTerm so a host terminal
-# cannot take the monitor out of the layout the user is watching.
+# herdr and Orca own their panes and must both be checked before iTerm. herdr
+# draws its panes inside a host iTerm session but passes TERM_PROGRAM through
+# unchanged, so trusting TERM_PROGRAM there opens a real iTerm split outside the
+# layout the user is watching: it succeeds, reports success, and is never seen.
+# HERDR_ENV=1 and ORCA_AGENT_PANE are the reliable signals.
 MONITOR_ENV_PREFIX=""
 for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
   VALUE="${!KEY:-}"
