@@ -8,10 +8,12 @@
 #               Also settable via COLLAB_TEMPLATE. Empty = generic lead/worker roles.
 #
 # Monitor selection (env vars):
-#   COLLAB_MONITOR=auto     (default) iTerm split on macOS+iTerm2, else tmux session
+#   COLLAB_MONITOR=auto     (default) herdr, Orca or iTerm pane, else tmux
+#   COLLAB_MONITOR=orca     open in the current Orca pane
 #   COLLAB_MONITOR=iterm    force iTerm split
 #   COLLAB_MONITOR=tmux     force a detached tmux session (old behavior)
 #   COLLAB_MONITOR=none     no monitor at all
+#   COLLAB_ORCA_MODE=split (default) | tab   how Orca opens the monitor
 #   COLLAB_ITERM_MODE=split (default) | tab | window   how iTerm opens the monitor
 # COLLAB_WORKTREE=team creates a retained shared git worktree for local agents.
 set -euo pipefail
@@ -260,16 +262,15 @@ else
 fi
 
 # ─── 4. Monitor ───
-# Monitor selection order (override via COLLAB_MONITOR=herdr|tmux|iterm|none):
-#   1. herdr pane   — if running inside a herdr workspace
-#   2. tmux split   — if already inside a tmux session
-#   3. iTerm split  — on macOS when iTerm2 is the active terminal (or forced)
-#   4. tmux detached session — cross-platform fallback
+# Monitor selection order (override via COLLAB_MONITOR=herdr|orca|tmux|iterm|none):
+#   1. herdr pane: if running inside a herdr workspace
+#   2. Orca pane: if running inside Orca and its CLI is available
+#   3. tmux split: if already inside a tmux session
+#   4. iTerm split: on macOS when iTerm2 is the active terminal (or forced)
+#   5. tmux detached session: cross-platform fallback
 #
-# herdr comes first and must be checked before iTerm: herdr owns the terminal
-# and draws its own panes inside a host iTerm session, but passes TERM_PROGRAM
-# through unchanged. Trusting TERM_PROGRAM there opens a real iTerm split
-# outside the layout the user is watching, so the monitor is never seen.
+# herdr and Orca own their panes. Check them before iTerm so a host terminal
+# cannot take the monitor out of the layout the user is watching.
 MONITOR_ENV_PREFIX=""
 for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
   VALUE="${!KEY:-}"
@@ -287,10 +288,19 @@ elif [ "$MONITOR_PREF" = "auto" ] && [ "${HERDR_ENV:-}" = "1" ] && command -v he
   use_herdr=true
 fi
 
+use_orca=false
+if [ "$MONITOR_PREF" = "orca" ]; then
+  use_orca=true
+elif [ "$MONITOR_PREF" = "auto" ] && [ "$use_herdr" = false ] \
+     && [ -n "${ORCA_AGENT_PANE:-}" ] \
+     && { command -v orca >/dev/null 2>&1 || [ -x /Applications/Orca.app/Contents/Resources/bin/orca ]; }; then
+  use_orca=true
+fi
+
 use_iterm=false
 if [ "$MONITOR_PREF" = "iterm" ]; then
   use_iterm=true
-elif [ "$MONITOR_PREF" = "auto" ] && [ "$use_herdr" = false ] && [ -z "${TMUX:-}" ] \
+elif [ "$MONITOR_PREF" = "auto" ] && [ "$use_herdr" = false ] && [ "$use_orca" = false ] && [ -z "${TMUX:-}" ] \
      && [ "$(uname)" = "Darwin" ] && [ "${TERM_PROGRAM:-}" = "iTerm.app" ]; then
   use_iterm=true
 fi
@@ -314,6 +324,27 @@ elif [ "$use_herdr" = true ]; then
     fi
   else
     echo -e "  ${D}herdr launch failed: $(head -1 /tmp/ensemble-herdr.err 2>/dev/null)${R}"
+    echo -e "  ${D}Falling back to tmux session...${R}"
+    MONITOR_SESSION="ensemble-$TEAM_ID"
+    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
+    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
+      "node --import tsx cli/monitor.ts $TEAM_ID"
+    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
+    MONITOR_MODE="session"
+  fi
+elif [ "$use_orca" = true ]; then
+  ORCA_MODE="${COLLAB_ORCA_MODE:-split}"
+  if ORCA_RESULT=$("$SCRIPT_DIR/open-orca-monitor.sh" "$REPO_DIR" "$TEAM_ID" "$ORCA_MODE" 2>/tmp/ensemble-orca.err); then
+    ORCA_TERMINAL=$(printf '%s\n' "$ORCA_RESULT" | sed -n 's/.*new_pane_id=\([^ ]*\).*/\1/p' | tail -1)
+    if [ -n "$ORCA_TERMINAL" ]; then
+      echo -e "  ${CHECK} Monitor opened ${D}(Orca ${ORCA_MODE})${R}"
+      MONITOR_MODE="orca"
+    else
+      echo -e "  \033[93m!${R} Monitor gestart maar Orca gaf geen terminal-id terug (zie /tmp/collab-orca-last.log)"
+      MONITOR_MODE="orca"
+    fi
+  else
+    echo -e "  ${D}Orca launch failed: $(head -1 /tmp/ensemble-orca.err 2>/dev/null)${R}"
     echo -e "  ${D}Falling back to tmux session...${R}"
     MONITOR_SESSION="ensemble-$TEAM_ID"
     tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
@@ -432,6 +463,8 @@ if [ "$MONITOR_MODE" = "split" ]; then
   echo -e "  ${D}┌─ Monitor (right panel) ───────────────┐${R}"
 elif [ "$MONITOR_MODE" = "herdr" ]; then
   echo -e "  ${D}┌─ Monitor (herdr pane) ────────────────┐${R}"
+elif [ "$MONITOR_MODE" = "orca" ]; then
+  echo -e "  ${D}┌─ Monitor (Orca pane) ─────────────────┐${R}"
 elif [ "$MONITOR_MODE" = "iterm" ]; then
   echo -e "  ${D}┌─ Monitor (iTerm native pane) ─────────┐${R}"
 elif [ "$MONITOR_MODE" = "none" ]; then
