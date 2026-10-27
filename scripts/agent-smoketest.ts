@@ -121,10 +121,15 @@ async function main(): Promise<void> {
       if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error('--timeout requires a positive number of seconds')
     } else keys.push(args[i])
   }
-  const selected = keys.length ? [...new Set(keys)] : Object.keys(config)
-  for (const key of selected) if (!config[key]) throw new Error(`Unknown agent key: ${key}`)
+  const requested = keys.length ? [...new Set(keys)] : Object.keys(config)
+  const selected = requested.filter(key => config[key])
+  const unknown = requested.filter(key => !config[key])
 
   const results: Record<string, Result> = {}
+  // An unknown key (requested by the caller but absent from agents.json) used to throw and
+  // abort the whole smoketest with empty stdout, which crashed the caller's JSON parse. Report
+  // it as a per-agent finding instead so every other agent still gets tested.
+  for (const key of unknown) results[key] = { status: 'missing', seconds: 0, gates: [], detail: 'unknown agent key' }
   let next = 0
   await Promise.all(Array.from({ length: Math.min(3, selected.length) }, async () => {
     while (next < selected.length) {
@@ -132,10 +137,10 @@ async function main(): Promise<void> {
       results[key] = await probe(key, config[key], timeoutSeconds)
     }
   }))
-  const ordered = Object.fromEntries(selected.map(key => [key, results[key]]))
+  const ordered = Object.fromEntries(requested.map(key => [key, results[key]]))
   process.stdout.write(`${JSON.stringify(ordered)}\n`)
-  process.stderr.write(`Agent smoketest: ${selected.map(key => `${key}=${results[key].status}`).join(', ')}\n`)
-  if (selected.some(key => !['ok', 'missing'].includes(results[key].status))) process.exitCode = 1
+  process.stderr.write(`Agent smoketest: ${requested.map(key => `${key}=${results[key].status}`).join(', ')}\n`)
+  if (requested.some(key => !['ok', 'missing'].includes(results[key].status))) process.exitCode = 1
 }
 
 main().catch(error => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1 })
