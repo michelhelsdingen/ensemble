@@ -904,6 +904,23 @@ describe('worktree isolation lifecycle', () => {
     }
   })
 
+  it('retries an unconfirmed prompt and names the silent agent after three attempts', async () => {
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(65_000)
+      await creation
+      expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(3)
+      expect(appendedMessages.some(message => message.content.includes('codex-1 did not respond after 3 prompt attempts'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('marks an agent failed when normal team message delivery finds no agent', async () => {
     const team = makeTeam({ agents: [makeTeam().agents[0]] })
     const { mod, mocks } = await setupWorktreeService(team)

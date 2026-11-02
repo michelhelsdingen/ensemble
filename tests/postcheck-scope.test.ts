@@ -39,7 +39,7 @@ case "$1" in
     echo "collab-1758-4412-claude-1: 1 windows"
     echo "collab-9931-7720-codex-1: 1 windows"
     ;;
-  capture-pane) echo "Not logged in" ;;
+  capture-pane) echo "\${TEST_CAPTURE:-Not logged in}" ;;
 esac
 exit 0
 `,
@@ -52,10 +52,10 @@ afterEach(() => {
   fs.rmSync(bin, { recursive: true, force: true })
 })
 
-function draaiPostcheck(teamId: string): string {
+function draaiPostcheck(teamId: string, capture = ''): string {
   try {
     return execFileSync(POSTCHECK, [teamId, '0'], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLAB_RUNTIME_ROOT: root },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLAB_RUNTIME_ROOT: root, TEST_CAPTURE: capture },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -96,5 +96,25 @@ describe('postcheck scope', () => {
 
     expect(uit).toMatch(/geen sessieregister/i)
     expect(gekildeSessies()).toEqual([])
+  })
+
+  it('waarschuwt voor de stille agent als een andere agent wel berichten stuurde', () => {
+    const dir = path.join(root, 'asymmetrisch-team')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompts', 'codex-1.txt'), 'prompt')
+    fs.writeFileSync(path.join(dir, 'prompts', 'agy-2.txt'), 'prompt')
+    fs.writeFileSync(path.join(dir, 'sessions'), 'asymmetrisch-team-codex-1\nasymmetrisch-team-agy-2\n')
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), [
+      JSON.stringify({ from: 'codex-1', content: 'started' }),
+      JSON.stringify({ from: 'ensemble', content: 'system notice' }),
+    ].join('\n') + '\n')
+
+    const uit = draaiPostcheck('asymmetrisch-team', 'ready')
+
+    expect(uit).toMatch(/agy-2/)
+    expect(uit).toMatch(/stil|geen bericht/i)
+    expect(uit).toContain('collab-rescue.sh asymmetrisch-team agy-2')
+    expect(uit).not.toContain('agents healthy')
   })
 })

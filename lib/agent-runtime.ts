@@ -90,7 +90,7 @@ export interface AgentRuntime {
 
   // I/O
   sendKeys(name: string, keys: string, opts?: { literal?: boolean; enter?: boolean; agentInput?: boolean }): Promise<void>
-  pasteFromFile(name: string, filePath: string): Promise<void>
+  pasteFromFile(name: string, filePath: string, submitDelayMs?: number): Promise<void>
   capturePane(name: string, lines?: number): Promise<string>
   /** Name of the process in the pane's foreground ('' when unknown). */
   getForegroundCommand?(name: string): Promise<string>
@@ -309,8 +309,9 @@ export class TmuxRuntime implements AgentRuntime {
    *
    * Retries up to 3x with exponential backoff (200ms, 400ms) before giving
    * up -- covers transient tmux server load and buffer-stack flushes.
+   * Callers may increase submitDelayMs when a TUI needs more time to finish a paste.
    */
-  async pasteFromFile(name: string, filePath: string): Promise<void> {
+  async pasteFromFile(name: string, filePath: string, submitDelayMs = 1000): Promise<void> {
     const sName = this.sanitizeName(name)
     // Pasting is only ever used for agent input, never for shell commands.
     await this.assertAgentInForeground(name)
@@ -354,7 +355,7 @@ export class TmuxRuntime implements AgentRuntime {
     // dezelfde pane. Give TUI time to process the paste, then send Enter twice
     // (some TUIs like Gemini CLI need an extra Enter after paste); een
     // mislukte Enter wordt gelogd maar triggert geen nieuwe paste.
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise(r => setTimeout(r, submitDelayMs))
     for (const wacht of [0, 300]) {
       if (wacht) await new Promise(r => setTimeout(r, wacht))
       try {

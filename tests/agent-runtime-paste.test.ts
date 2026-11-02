@@ -76,4 +76,20 @@ describe('pasteFromFile', () => {
     const sendKeysCalls = callLog.filter(c => c.includes('send-keys'))
     expect(sendKeysCalls.length).toBe(2)
   })
+
+  it('waits for the requested paste settling time before submitting', async () => {
+    vi.useFakeTimers()
+    try {
+      customHandler.fn = () => null
+      const runtime = new TmuxRuntime()
+      const delivery = runtime.pasteFromFile('sess', '/tmp/x.txt', 5000)
+      await vi.advanceTimersByTimeAsync(4999)
+      expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(301)
+      await delivery
+      expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -409,16 +409,55 @@ fi
 # ─── 6. Wait for agents ───
 AGENT_WAIT_SECS=12
 echo -ne "  ${SPIN} Agents spawning..."
+silent_agents() {
+  python3 - "$RUNTIME_DIR/sessions" "$RUNTIME_DIR/prompts" "$MESSAGES_FILE" <<'PY'
+import glob
+import json
+import os
+import sys
+
+sessions_path, prompts_dir, messages_path = sys.argv[1:]
+agent_names = [os.path.basename(name)[:-4] for name in glob.glob(os.path.join(prompts_dir, '*.txt'))]
+active = set()
+try:
+    with open(messages_path, encoding='utf-8') as source:
+        for line in source:
+            try:
+                sender = json.loads(line).get('from')
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            if isinstance(sender, str):
+                active.add(sender)
+except OSError:
+    pass
+
+try:
+    with open(sessions_path, encoding='utf-8') as source:
+        sessions = [line.strip() for line in source if line.strip()]
+except OSError:
+    sessions = []
+
+for session in sessions:
+    matches = [name for name in agent_names if session.endswith('-' + name)]
+    if not matches:
+        print(session)
+        continue
+    agent_name = max(matches, key=len)
+    if agent_name not in active:
+        print(agent_name)
+PY
+}
 for _ in $(seq 1 "$AGENT_WAIT_SECS"); do
   sleep 1
-  MC=$(wc -l < "$MESSAGES_FILE" 2>/dev/null | tr -d ' ' || echo "0")
-  [ "${MC:-0}" -gt "0" ] && break
+  SILENT_AGENTS=$(silent_agents)
+  [ -z "$SILENT_AGENTS" ] && break
 done
 MC=$(wc -l < "$MESSAGES_FILE" 2>/dev/null | tr -d ' ' || echo "0")
-if [ "${MC:-0}" -gt "0" ]; then
-  echo -e "\r  ${CHECK} Agents communicating ${D}(${MC} messages)${R}"
+SILENT_AGENTS=$(silent_agents)
+if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then
+  echo -e "\r  ${CHECK} All agents communicating ${D}(${MC} messages)${R}"
 else
-  echo -e "\r  ${SPIN} Agents warming up...       "
+  echo -e "\r  ${SPIN} Waiting for agent messages...       "
 fi
 
 # ─── 6b. Postcheck (run in background after 30s — kills team if agents broken) ───
@@ -451,13 +490,14 @@ print(text if len(text) <= 31 else text[:30] + '…')
 # ook als de wachtlus hierboven net had vastgesteld dat er nul berichten waren:
 # de postcheck meldde daarna "agents may be in deep work", wat een lege pane
 # niet is.
-if team_has_evidence "$RUNTIME_DIR"; then
+if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then
   echo -e "  ${BD}${G}Team is live!${R} ${W}${AGENT_NAMES}${R} are collaborating."
 else
-  echo -e "  ${BD}\033[93mTeam gestart, maar nog geen enkel bericht na ${AGENT_WAIT_SECS}s.${R}" >&2
-  echo -e "  Dat is hetzelfde beeld als een prompt die de TUI niet heeft gehaald." >&2
-  echo -e "  Controleer met: tmux attach -t \$(head -1 \"$RUNTIME_DIR/sessions\")" >&2
-  echo -e "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
+  echo -e "  ${BD}\033[93mNiet alle agents hebben binnen ${AGENT_WAIT_SECS}s een bericht gestuurd:${R}" >&2
+  while IFS= read -r agent; do [ -z "$agent" ] || echo "  - $agent" >&2; done <<< "$SILENT_AGENTS"
+  echo -n "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
+  while IFS= read -r agent; do [ -z "$agent" ] || printf ' %q' "$agent" >&2; done <<< "$SILENT_AGENTS"
+  echo >&2
   print_team_id_trailer
   exit 3
 fi

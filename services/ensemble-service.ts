@@ -37,6 +37,7 @@ import { runStagedWorkflow } from '../lib/staged-workflow'
 import { readEnsembleConfig } from '../lib/ensemble-config'
 import { emitEvent, runPlan, type BrainEvent } from '../lib/brain-hooks'
 import { replaceTeamAgent, stopTeamReplacements } from '../lib/agent-replacement'
+import { confirmPromptStart } from '../lib/prompt-start'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const COLLAB_TEMPLATES_PATH = path.join(__dirname, '..', 'collab-templates.json')
@@ -1087,25 +1088,27 @@ export async function createEnsembleTeam(
     } else {
       // Normal mode: inject prompts simultaneously
       console.log(`[Ensemble] Injecting prompts into ${injectTargets.length} agents (${ready.length} ready, ${notReady.length} best-effort)`)
-      await Promise.all(
+      const deliveryResults = await Promise.all(
         injectTargets.map(async ({ agent, sessionName }) => {
           const promptFile = collabPromptFile(team.id, agent.name)
-          try {
+          const deliver = async () => {
             if (agent.hostId && !isSelf(agent.hostId)) {
               const host = getHostById(agent.hostId)
-              if (host) {
-                const prompt = fs.readFileSync(promptFile, 'utf-8')
-                await postRemoteSessionCommand(host.url, sessionName, prompt)
-              }
+              if (!host) throw new Error(`Unknown host: ${agent.hostId}`)
+              const prompt = fs.readFileSync(promptFile, 'utf-8')
+              await postRemoteSessionCommand(host.url, sessionName, prompt)
             } else {
               const agentCfg = resolveAgentProgram(agent.program)
               if (agentCfg.inputMethod === 'pasteFromFile') {
-                await runtime.pasteFromFile(sessionName, promptFile)
+                if (agent.program.toLowerCase().includes('codex')) {
+                  await runtime.pasteFromFile(sessionName, promptFile, 5000)
+                } else {
+                  await runtime.pasteFromFile(sessionName, promptFile)
+                }
               } else {
                 const prompt = fs.readFileSync(promptFile, 'utf-8')
                 await runtime.sendKeys(sessionName, prompt, { literal: true, enter: true, agentInput: true })
               }
-              // Claude sometimes shows "[Pasted text" and needs an extra Enter to submit
               if (agent.program.toLowerCase().includes('claude')) {
                 for (const delayMs of [1500, 3000, 6000]) {
                   await new Promise(resolve => setTimeout(resolve, delayMs))
@@ -1115,7 +1118,11 @@ export async function createEnsembleTeam(
                 }
               }
             }
-            console.log(`[Ensemble] ✓ Prompt injected into ${sessionName}`)
+          }
+          try {
+            await deliver()
+            console.log(`[Ensemble] Prompt submitted to ${sessionName}; awaiting agent message`)
+            return { agent, sessionName, deliver }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             if (err instanceof Error && err.name === 'AgentNotRunningError') {
@@ -1128,15 +1135,46 @@ export async function createEnsembleTeam(
               type: 'chat', timestamp: new Date().toISOString(),
             })
             console.error(`[Ensemble] ✗ Failed to inject prompt into ${sessionName}:`, err)
+            return null
           }
         })
       )
 
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `🚀 ${injectTargets.length} agents received their task — collaboration started${notReady.length ? ` (${notReady.length} via best-effort fallback)` : ''}`,
+        content: `🚀 Prompt submission attempted for ${deliveryResults.filter(Boolean).length}/${injectTargets.length} agents; awaiting confirmation from each agent`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
+      for (const result of deliveryResults) {
+        if (!result) continue
+        const { agent, sessionName, deliver } = result
+        void confirmPromptStart({
+          hasStarted: () => getMessages(team.id).some(message => message.from === agent.name),
+          retry: async () => {
+            console.warn(`[Ensemble] No message from ${agent.name}; retrying prompt submission to ${sessionName}`)
+            await deliver()
+          },
+        }).then(confirmed => {
+          if (confirmed) {
+            console.log(`[Ensemble] Prompt confirmed by message from ${agent.name}`)
+          } else {
+            console.error(`[Ensemble] Prompt unconfirmed after 3 attempts: ${agent.name} (${sessionName})`)
+            appendMessage(team.id, {
+              id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+              content: `❌ ${agent.name} did not respond after 3 prompt attempts; inspect the agent pane`,
+              type: 'chat', timestamp: new Date().toISOString(),
+            })
+          }
+        }).catch(err => {
+          const reason = err instanceof Error ? err.message : String(err)
+          console.error(`[Ensemble] Prompt verification failed for ${agent.name}:`, reason)
+          appendMessage(team.id, {
+            id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+            content: `❌ ${agent.name} prompt verification failed: ${reason}`,
+            type: 'chat', timestamp: new Date().toISOString(),
+          })
+        })
+      }
     }
   }
 

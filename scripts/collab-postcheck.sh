@@ -66,11 +66,46 @@ for s in $SESSIONS; do
   fi
 done
 
-# Also check if messages.jsonl has any traffic — if 0 messages after $WAIT secs, suspect
+# Check each spawned agent independently. The session register stores names
+# prefixed with the team name; prompt filenames and message senders use the
+# agent's short name.
 MSG_COUNT=0
 if [ -f "$RD/messages.jsonl" ]; then
   MSG_COUNT=$(wc -l < "$RD/messages.jsonl" | tr -d ' ')
 fi
+SILENT_AGENTS=$(python3 - "$RD/sessions" "$RD/prompts" "$RD/messages.jsonl" <<'PY'
+import glob
+import json
+import os
+import sys
+
+sessions_path, prompts_dir, messages_path = sys.argv[1:]
+agent_names = [os.path.basename(name)[:-4] for name in glob.glob(os.path.join(prompts_dir, '*.txt'))]
+active = set()
+try:
+    with open(messages_path, encoding='utf-8') as source:
+        for line in source:
+            try:
+                sender = json.loads(line).get('from')
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            if isinstance(sender, str):
+                active.add(sender)
+except OSError:
+    pass
+
+with open(sessions_path, encoding='utf-8') as source:
+    sessions = [line.strip() for line in source if line.strip()]
+for session in sessions:
+    matches = [name for name in agent_names if session.endswith('-' + name)]
+    if not matches:
+        print(session)
+        continue
+    agent_name = max(matches, key=len)
+    if agent_name not in active:
+        print(agent_name)
+PY
+)
 
 if [ "$ERRORS_FOUND" -gt 0 ]; then
   echo -e "${RED}✗ Postcheck FAILED — $ERRORS_FOUND agent(s) in error state${R}" >&2
@@ -85,12 +120,15 @@ if [ "$ERRORS_FOUND" -gt 0 ]; then
   exit 2
 fi
 
-if [ "$MSG_COUNT" -eq 0 ]; then
-  echo -e "${RED}✗${R} Nul berichten na ${WAIT}s. Dat is geen diep werk maar een team dat niets doet." >&2
-  echo -e "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
+if [ -n "$SILENT_AGENTS" ]; then
+  echo -e "${RED}✗${R} Geen bericht ontvangen van deze agent(s) na ${WAIT}s:" >&2
+  while IFS= read -r agent; do [ -z "$agent" ] || echo "  - $agent" >&2; done <<< "$SILENT_AGENTS"
+  echo -n "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
+  while IFS= read -r agent; do [ -z "$agent" ] || printf ' %q' "$agent" >&2; done <<< "$SILENT_AGENTS"
+  echo >&2
   exit 2
 fi
 
-echo -e "${GRN}✓${R} $MSG_COUNT messages exchanged — agents healthy"
+echo -e "${GRN}✓${R} All registered agents sent a message; $MSG_COUNT messages exchanged"
 
 exit 0

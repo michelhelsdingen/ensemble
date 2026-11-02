@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# collab-rescue.sh — handmatig prompts injecteren als ensemble-service het oversloeg
+# collab-rescue.sh: retry unresponsive team agents and verify their response.
 #
 # Symptoom: team draait, agents zichtbaar in tmux/iTerm, maar messages.jsonl is leeg
 # en /tmp/ensemble-server.log toont "did not become ready within 60s".
@@ -8,19 +8,19 @@
 # patroon matcht soms niet, dus prompts blijven in prompts/<agent>.txt liggen zonder
 # ooit naar de agent te gaan.
 #
-# Deze rescue paste de prompts handmatig via tmux load-buffer / paste-buffer / send-keys
-# en submit met een extra Enter voor Claude (die "[Pasted text" toont).
+# A successful tmux command alone does not prove that the agent started a turn.
 #
 # Gebruik:
-#   collab-rescue.sh <TEAM_ID>
+#   collab-rescue.sh <TEAM_ID> [agent-name ...]
 #   collab-rescue.sh         # gebruikt /tmp/collab-team-id.txt
 #
-# Verifieer dat het werkt:
-#   wc -l /tmp/ensemble/<TEAM_ID>/messages.jsonl   # moet >0 worden binnen 30s
+# With no agent names, retry only agents without a message.
 
 set -euo pipefail
 
 TEAM_ID="${1:-$(cat /tmp/collab-team-id.txt 2>/dev/null || true)}"
+if [ "$#" -gt 0 ]; then shift; fi
+REQUESTED_AGENTS=("$@")
 
 if [ -z "$TEAM_ID" ]; then
   echo "FOUT: geen team-id opgegeven en /tmp/collab-team-id.txt niet gevonden" >&2
@@ -62,13 +62,32 @@ echo "team-id: $TEAM_ID"
 echo "sessies: $(tr '\n' ' ' < "$RD/sessions")"
 echo
 
-CURRENT_COUNT=$(wc -l < "$RD/messages.jsonl" 2>/dev/null | tr -d ' ' || echo 0)
-echo "messages.jsonl current: $CURRENT_COUNT lines"
+agent_messages() {
+  python3 - "$RD/messages.jsonl" "$1" <<'PY'
+import json, sys
+count = 0
+try:
+    with open(sys.argv[1]) as messages:
+        for line in messages:
+            try:
+                if json.loads(line).get('from') == sys.argv[2]:
+                    count += 1
+            except (ValueError, TypeError):
+                pass
+except FileNotFoundError:
+    pass
+print(count)
+PY
+}
 
-if [ "$CURRENT_COUNT" -gt 2 ]; then
-  echo "Team is al communicatief actief — rescue waarschijnlijk niet nodig. Aborteer."
-  exit 0
-fi
+agent_requested() {
+  [ "${#REQUESTED_AGENTS[@]}" -eq 0 ] && return 0
+  local requested
+  for requested in "${REQUESTED_AGENTS[@]}"; do
+    [ "$requested" = "$1" ] && return 0
+  done
+  return 1
+}
 
 deliver_to_session() {
   local SESSION="$1"
@@ -88,7 +107,7 @@ deliver_to_session() {
   local BUFNAME="rescue-${AGENT_NAME}-$$"
   tmux load-buffer -b "$BUFNAME" "$PROMPT_FILE"
   tmux paste-buffer -b "$BUFNAME" -t "$SESSION"
-  sleep 1
+  if [[ "$AGENT_NAME" == *codex* ]]; then sleep 5; else sleep 1; fi
 
   # Eerste Enter na paste
   tmux send-keys -t "$SESSION" Enter
@@ -109,10 +128,12 @@ deliver_to_session() {
   fi
 
   tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
-  echo "  $AGENT_NAME: prompt afgeleverd"
+  echo "  $AGENT_NAME: prompt naar tmux gestuurd, wacht op agentbericht"
 }
 
 echo "=== prompt-injectie ==="
+FAILED=0
+MATCHED=()
 # Sessie naar promptbestand: de sessie heet altijd "<teamnaam>-<agentnaam>", en
 # <agentnaam> is precies de bestandsnaam in prompts/ (zonder .txt). Een
 # teamnaam kan zelf koppeltekens of cijfers bevatten, dus een generieke regex
@@ -141,23 +162,46 @@ while IFS= read -r SESSION; do
     echo "  $SESSION: geen promptbestand voor deze sessie gevonden, overgeslagen"
     continue
   fi
-  deliver_to_session "$SESSION" "$PROMPT_FILE" "$AGENT_NAME"
+  if ! agent_requested "$AGENT_NAME"; then continue; fi
+  MATCHED+=("$AGENT_NAME")
+  BEFORE=$(agent_messages "$AGENT_NAME")
+  if [ "$BEFORE" -gt 0 ]; then
+    echo "  $AGENT_NAME: heeft al $BEFORE bericht(en), geen rescue nodig"
+    continue
+  fi
+  CONFIRMED=0
+  for attempt in 1 2 3; do
+    if ! deliver_to_session "$SESSION" "$PROMPT_FILE" "$AGENT_NAME"; then
+      break
+    fi
+    for _ in $(seq 1 15); do
+      AFTER=$(agent_messages "$AGENT_NAME")
+      if [ "$AFTER" -gt "$BEFORE" ]; then
+        CONFIRMED=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$CONFIRMED" -eq 1 ]; then break; fi
+    echo "  $AGENT_NAME: geen agentbericht na poging $attempt" >&2
+  done
+  if [ "$CONFIRMED" -eq 1 ]; then
+    echo "  $AGENT_NAME: bevestigd door eigen bericht"
+  else
+    echo "  $AGENT_NAME: NIET bevestigd na maximaal 3 pogingen; inspecteer tmux attach -t $SESSION" >&2
+    FAILED=1
+  fi
 done < "$RD/sessions"
 
-echo
-echo "=== verifieer (wacht 10s) ==="
-sleep 10
-NEW_COUNT=$(wc -l < "$RD/messages.jsonl" 2>/dev/null | tr -d ' ' || echo 0)
-echo "messages.jsonl now: $NEW_COUNT lines (was $CURRENT_COUNT)"
+for requested in "${REQUESTED_AGENTS[@]}"; do
+  FOUND=0
+  for matched in "${MATCHED[@]}"; do
+    if [ "$requested" = "$matched" ]; then FOUND=1; break; fi
+  done
+  if [ "$FOUND" -eq 0 ]; then
+    echo "  $requested: niet gevonden in sessieregister" >&2
+    FAILED=1
+  fi
+done
 
-if [ "$NEW_COUNT" -gt "$CURRENT_COUNT" ]; then
-  echo "✓ Rescue succesvol — team communiceert nu"
-  exit 0
-else
-  echo "! Nog geen nieuwe berichten — controleer panes handmatig:"
-  while IFS= read -r SESSION; do
-    [ -n "$SESSION" ] || continue
-    echo "    tmux attach -t $SESSION"
-  done < "$RD/sessions"
-  exit 2
-fi
+exit "$FAILED"

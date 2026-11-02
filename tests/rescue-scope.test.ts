@@ -10,10 +10,10 @@ let root: string
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'ensemble-rescue-')) })
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
 
-function run(args: string[]): { out: string; code: number } {
+function run(args: string[], extraEnv: Record<string, string> = {}): { out: string; code: number } {
   try {
     const out = execFileSync(RESCUE, args, {
-      env: { ...process.env, COLLAB_RUNTIME_ROOT: root },
+      env: { ...process.env, COLLAB_RUNTIME_ROOT: root, ...extraEnv },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -76,4 +76,29 @@ describe('rescue scope', () => {
     expect(out).toMatch(/collab-1-1-codex-1: geen promptbestand voor deze sessie gevonden, overgeslagen/)
     expect(out).not.toMatch(/tmux sessie 'collab-1-1-codex-1' bestaat niet/)
   }, 15000)
+
+  it('meldt geen succes als tmux de prompt accepteert maar de agent niet reageert', () => {
+    makeTeam('team-stil', ['team-stil-codex-1', 'team-stil-agy-2'], {
+      'codex-1': 'prompt', 'agy-2': 'prompt',
+    })
+    fs.writeFileSync(path.join(root, 'team-stil', 'messages.jsonl'), '{"from":"agy-2","content":"working"}\n')
+    const bin = path.join(root, 'bin')
+    fs.mkdirSync(bin)
+    const tmux = path.join(bin, 'tmux')
+    fs.writeFileSync(tmux, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_TMUX_LOG"\n')
+    fs.chmodSync(tmux, 0o755)
+    const sleep = path.join(bin, 'sleep')
+    fs.writeFileSync(sleep, '#!/bin/sh\nexit 0\n')
+    fs.chmodSync(sleep, 0o755)
+    const log = path.join(root, 'tmux.log')
+
+    const { out, code } = run(['team-stil', 'codex-1'], {
+      PATH: `${bin}:${process.env.PATH}`, TEST_TMUX_LOG: log,
+    })
+
+    expect(code).not.toBe(0)
+    expect(out).toContain('codex-1: NIET bevestigd')
+    expect(out).not.toContain('prompt afgeleverd')
+    expect(fs.readFileSync(log, 'utf8')).not.toContain('team-stil-agy-2')
+  })
 })
