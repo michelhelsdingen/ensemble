@@ -70,3 +70,46 @@ describe('rescue gebruikt de afleverwijze uit de agentconfiguratie', () => {
     expect(log).not.toContain(' -l regel met')
   }, 30_000)
 })
+
+describe('rescue bij een agent die de configuratie niet kent', () => {
+  it('valt terug op plakken in plaats van te weigeren', () => {
+    // Rescue is de noodroute. Weigeren omdat agents.json de naam niet kent
+    // laat de gebruiker met niets achter, terwijl plakken bij elke CLI werkt.
+    const team = 'team-onbekend'
+    const runtime = path.join(root, 'runtime', team)
+    const bin = path.join(root, 'bin')
+    const log = path.join(root, 'tmux.log')
+    const config = path.join(root, 'agents.json')
+    fs.mkdirSync(path.join(runtime, 'prompts'), { recursive: true })
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(runtime, 'sessions'), `${team}-vreemd-1\n`)
+    fs.writeFileSync(path.join(runtime, 'prompts', 'vreemd-1.txt'), 'doe iets')
+    fs.writeFileSync(config, JSON.stringify({ test: {
+      name: 'test', command: 'test', flags: [], readyMarker: '❯',
+      inputMethod: 'sendKeys', color: 'white', icon: '*',
+    } }))
+    fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEST_TMUX_LOG"
+case "$1" in
+  capture-pane)
+    if grep -q 'paste-buffer' "$TEST_TMUX_LOG"; then printf '❯ prompt ontvangen\\n'
+    else printf '❯ leeg invoerveld\\n'; fi
+    ;;
+  has-session) exit 0 ;;
+esac
+exit 0
+`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const uit = execFileSync(RESCUE, [team], {
+      env: {
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_TMUX_LOG: log,
+        COLLAB_RUNTIME_ROOT: path.join(root, 'runtime'),
+        ENSEMBLE_AGENTS_CONFIG: config,
+        ENSEMBLE_AGENTS_EXTRA: path.join(root, 'geen-extra.json'),
+      },
+      encoding: 'utf8',
+    })
+    expect(fs.readFileSync(log, 'utf8')).toContain('paste-buffer')
+    expect(uit).toMatch(/afleverwijze onbekend|niet in agents.json/i)
+  }, 30_000)
+})

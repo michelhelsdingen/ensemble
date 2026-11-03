@@ -129,9 +129,12 @@ deliver_to_session() {
   VOOR="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
 
   local INPUT_METHOD BUFNAME PROMPT_TEXT
+  # Kent agents.json deze naam niet, dan plakken we. Rescue is de noodroute:
+  # weigeren laat de gebruiker met niets achter, en een tmux-buffer werkt bij
+  # elke CLI. De melding zegt wel wat er aan de hand is.
   if ! INPUT_METHOD=$("$REPO_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/agent-config-query.ts" input-method "$AGENT_NAME"); then
-    echo "  $AGENT_NAME: afleverwijze ontbreekt in agents.json" >&2
-    return 1
+    echo "  $AGENT_NAME: afleverwijze onbekend (niet in agents.json), ik plak de prompt"
+    INPUT_METHOD="pasteFromFile"
   fi
   if [ "$INPUT_METHOD" = "sendKeys" ]; then
     PROMPT_TEXT="$(< "$PROMPT_FILE")"

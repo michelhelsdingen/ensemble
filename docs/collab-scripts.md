@@ -82,16 +82,17 @@ Output (herdr example, three agents):
 ```
 
 `Team is live!` only prints when there is evidence: at least one message exchanged
-(`messages.jsonl` is non-empty). Without that evidence within the wait window the script warns
-instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the recovery path.
+(the prompt reached every agent's pane). Without that evidence within the wait window the script
+warns instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the recovery path.
 
 | Exit | Meaning |
 |---|---|
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
-| 9 | Preflight found an agent waiting on a startup dialog (passed through) |
 | 3 | Team created but the prompt never reached an agent |
-| 4 | Bridge or poller process died immediately after starting |
+| 4 | Bridge or poller died right after starting; the team is disbanded before exit |
+| 7 | Preflight found no healthy agent and no usable replacement (passed through) |
+| 9 | Preflight found an agent waiting on a startup dialog (passed through) |
 
 The launcher waits on evidence instead of on the clock. The service records per agent how far
 its prompt got (`pending`, `delivered`, `confirmed`, `silent`, `failed`), where `confirmed` means
@@ -232,6 +233,18 @@ matched (codex's prompt format varies enough that this happens occasionally).
 ./scripts/collab-rescue.sh <team-id>
 ./scripts/collab-rescue.sh              # falls back to /tmp/collab-team-id.txt
 ```
+
+It judges delivery the way the service does: it checks the pane before pasting (`pane-ready.ts`),
+waits for the pane to show the paste instead of sleeping a fixed five seconds, and then checks that
+the screen actually changed. A pane that took the prompt is a success even when the agent has not
+spoken yet; that is reported as thinking, not as a failure. It does not paste the same prompt again
+on silence, which is what used to turn a slow agent into three copies of the same task.
+
+Two defects here were found by the review team on 03-11-2026 and both were reproduced: the
+documented default form (no agent names) died on `REQUESTED_AGENTS[@]: unbound variable`, because an
+empty array under `set -u` is fatal on bash 3.2 (which is `/bin/bash` here), and the follow-up Enter
+for a paste notice was tied to `claude` appearing in the agent's *name*, so a glm agent never got
+it.
 
 It reads `<runtime-dir>/sessions` for this team's tmux sessions and matches each one against the
 agent prompt files in `<runtime-dir>/prompts/` by name, so it only ever delivers into panes that
