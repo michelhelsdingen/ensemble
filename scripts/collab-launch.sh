@@ -248,7 +248,7 @@ printf '%s\n' "$TEAM_ID" > "$TEAM_ID_FILE"
 # Also write to a well-known location so callers can find the latest team ID.
 # NOTE: this file is global and gets overwritten by concurrent launches. Callers
 # that support parallel collabs should read the TEAM_ID=... line from stdout instead.
-printf '%s\n' "$TEAM_ID" > /tmp/collab-team-id.txt
+printf '%s\n' "$TEAM_ID" > "${COLLAB_TEAM_ID_FILE:-/tmp/collab-team-id.txt}"
 echo -e "  ${CHECK} Team created ${D}(${TEAM_NAME})${R}"
 if [ -n "$TEMPLATE" ]; then
   echo -e "  ${CHECK} Template ${D}${TEMPLATE}${R}"
@@ -258,8 +258,9 @@ fi
 nohup "$SCRIPT_DIR/ensemble-bridge.sh" "$TEAM_ID" "$API" >> "$BRIDGE_LOG_FILE" 2>&1 &
 # Even kijken of hij het overleeft. Hiervoor kwam het vinkje er altijd, ook als
 # de bridge meteen stuksloeg op zijn health check en het team dus nooit een
-# bericht naar de API zou sturen.
-sleep 0.3
+# bericht naar de API zou sturen. Kijken tot het pid-bestand er is, niet een
+# vaste 0,3 seconde: dat bestand staat er normaal binnen 30 milliseconden.
+for _ in $(seq 1 30); do [ -s "$BRIDGE_PID_FILE" ] && break; sleep 0.05; done
 BRIDGE_PID=$(cat "$BRIDGE_PID_FILE" 2>/dev/null || echo "")
 if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
   echo -e "  ${CHECK} Bridge started ${D}(pid $BRIDGE_PID)${R}"
@@ -404,7 +405,7 @@ nohup "$SCRIPT_DIR/collab-poller.sh" "$TEAM_ID" "$API" > /dev/null 2>&1 &
 # Zelfde controle als bij de bridge: zonder deze check kreeg de poller ook een
 # vinkje terwijl hij meteen kon zijn gestopt (bijvoorbeeld omdat $RUNTIME_DIR
 # nog niet bestond op het moment dat hij zijn pid-bestand probeerde te zetten).
-sleep 0.3
+for _ in $(seq 1 30); do [ -s "$POLLER_PID_FILE" ] && break; sleep 0.05; done
 POLLER_PID=$(cat "$POLLER_PID_FILE" 2>/dev/null || echo "")
 if [ -n "$POLLER_PID" ] && kill -0 "$POLLER_PID" 2>/dev/null; then
   echo -e "  ${CHECK} Poller started ${D}(pid $POLLER_PID)${R}"
@@ -463,10 +464,16 @@ PY
 }
 DELIVERY_STATE="unknown"
 DELIVERY_FAILED=""
+QUIET_AGENTS=""
 for _ in $(seq 1 "$AGENT_WAIT_SECS"); do
   DELIVERY_STATE=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | team_delivery_state)
   case "$DELIVERY_STATE" in
     confirmed) break ;;
+    # Aangekomen is gestart. De pane nam de prompt aan en veranderde daarna; dat
+    # is het bewijs waar het om ging. Of een agent binnen een minuut iets zegt,
+    # is zijn eigen denktijd en geen startprobleem: tot 03-11-2026 wachtte de
+    # launcher daar 120 seconden op en riep daarna dat het team niet startte.
+    delivered*) QUIET_AGENTS="$(printf '%s' "${DELIVERY_STATE#delivered}" | xargs || true)"; break ;;
     failed*) DELIVERY_FAILED="${DELIVERY_STATE#failed }"; break ;;
     unknown)
       # Een service zonder dit veld: terug naar de telling op het sessieregister.
@@ -480,6 +487,14 @@ MC=$(wc -l < "$MESSAGES_FILE" 2>/dev/null | tr -d ' ' || echo "0")
 if [ "$DELIVERY_STATE" = "confirmed" ]; then
   SILENT_AGENTS=""
   echo -e "\r  ${CHECK} All agents communicating ${D}(${MC} messages)${R}"
+elif [ "${DELIVERY_STATE#delivered}" != "$DELIVERY_STATE" ]; then
+  SILENT_AGENTS=""
+  if [ -n "$QUIET_AGENTS" ]; then
+    echo -e "\r  ${CHECK} Prompt aangekomen bij alle agents ${D}(${MC} messages)${R}"
+    echo -e "  ${D}nog geen bericht van: ${QUIET_AGENTS} — die denkt nog, de monitor laat het zien${R}"
+  else
+    echo -e "\r  ${CHECK} Prompt aangekomen bij alle agents ${D}(${MC} messages)${R}"
+  fi
 elif [ -n "$DELIVERY_FAILED" ]; then
   SILENT_AGENTS=$(printf '%s\n' $DELIVERY_FAILED)
   echo -e "\r  \033[91m✗${R} Prompt niet aangekomen bij: ${DELIVERY_FAILED}       "

@@ -196,6 +196,17 @@ if mislukt:
     print('failed ' + ' '.join(mislukt)); sys.exit(0)
 if all(a.get('delivery') == 'confirmed' or a.get('name') in sprekers for a in telt):
     print('confirmed'); sys.exit(0)
+# Aangekomen is gestart. 'delivered' en 'silent' betekenen beide dat de pane de
+# prompt heeft aangenomen; de agent heeft alleen nog niets gezegd. Tot 03-11-2026
+# gaf dit 'pending', waardoor de launcher 120 seconden wachtte en daarna meldde
+# dat het team niet was gestart, over een team dat gewoon aan het werk was.
+aangekomen = ('delivered', 'silent', 'confirmed')
+if all(a.get('delivery') in aangekomen or a.get('name') in sprekers for a in telt):
+    # 'confirmed' is zelf al bewijs van een bericht, ook als deze respons geen
+    # berichtenlijst meestuurt.
+    stil = [a.get('name', '?') for a in telt
+            if a.get('delivery') != 'confirmed' and a.get('name') not in sprekers]
+    print('delivered ' + ' '.join(stil)); sys.exit(0)
 print('pending')
 " 2>/dev/null || printf 'unknown\n'
 }

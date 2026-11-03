@@ -29,9 +29,9 @@ const agent = (name: string, delivery?: string, status = 'active') => ({
 })
 
 describe('team_delivery_state', () => {
-  it('is pending zolang niet iedereen iets heeft gezegd', () => {
+  it('is delivered zodra iedereen de prompt aannam, ook als niet iedereen al praatte', () => {
     expect(state({ team: { agents: [agent('codex-1', 'confirmed'), agent('claude-2', 'delivered')] } }))
-      .toBe('pending')
+      .toBe('delivered claude-2')
   })
 
   it('is confirmed als elke actieve agent een bericht heeft gestuurd', () => {
@@ -65,11 +65,25 @@ describe('team_delivery_state', () => {
     })).toBe('confirmed')
   })
 
-  it('wacht door bij een stille agent in plaats van hem mislukt te noemen', () => {
+  it('noemt een team waar de prompt overal aankwam delivered, met de stille agent erbij', () => {
+    // 03-11-2026 gemeten (team ee1b35b0): glm-1 had de prompt aangenomen en was
+    // aan het werk, grok-2 praatte al. Dit gaf toen 'pending', dus de launcher
+    // wachtte 120 seconden en riep daarna "niet alle agents hebben een bericht
+    // gestuurd" over een team dat gewoon liep. Aangekomen is gestart.
     expect(state({
       team: { agents: [agent('codex-1', 'confirmed'), agent('glm-2', 'silent')] },
       messages: [bericht('codex-1')],
-    })).toBe('pending')
+    })).toBe('delivered glm-2')
+  })
+
+  it('is delivered zodra elke agent de prompt aannam, ook zonder enig bericht', () => {
+    expect(state({ team: { agents: [agent('codex-1', 'delivered'), agent('glm-2', 'delivered')] } }))
+      .toBe('delivered codex-1 glm-2')
+  })
+
+  it('blijft pending zolang één agent de prompt nog niet aannam', () => {
+    expect(state({ team: { agents: [agent('codex-1', 'confirmed'), agent('glm-2', 'pending')] } }))
+      .toBe('pending')
   })
 
   it('blijft failed melden bij een echte afleverfout', () => {
