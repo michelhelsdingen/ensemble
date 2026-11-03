@@ -90,6 +90,19 @@ it('includes the original task and bounded recent messages', async () => {
   expect(prompt).not.toContain('marker-0 ')
   expect(Buffer.byteLength(prompt)).toBeLessThan(10_000)
 })
+it('vervangt niemand als de agents bij naam zijn gevraagd', async () => {
+  // 03-11-2026: er werd gestart met "codex,claude" en er draaiden vier agents.
+  // De launcher deed het goed; de service spawnde er vier minuten later agy en
+  // glm bij, en glm meldde zich als "vervangt claude-2". Wie zijn ploeg zelf
+  // samenstelt, krijgt een ander model er niet stil bij.
+  registry.updateTeam(teamId, { agentsExplicit: true })
+  await (await watch(false)).poll()
+  expect(spawn).not.toHaveBeenCalled()
+  const team = registry.getTeam(teamId)!
+  expect(team.agents).toHaveLength(1)
+  expect(team.agents[0].status).toBe('failed')
+  expect(registry.getMessages(teamId).some(m => /you named the agents yourself/i.test(m.content))).toBe(true)
+})
 it('marks failed when the replacement budget is exhausted', async () => {
   registry.updateTeam(teamId, { replacementCount: 2 })
   await (await watch(false)).poll()

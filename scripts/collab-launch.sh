@@ -186,7 +186,7 @@ fi
 # ─── 2. Create team (use env vars to avoid quoting hell) ───
 TEAM_NAME="collab-$(python3 -c 'import random,time; print(str(time.time_ns()//1000000)+"-"+str(random.randint(1000,9999)))')"
 PAYLOAD_FILE=$(mktemp)
-TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" TWORKTREE="${COLLAB_WORKTREE:-}" PFILE="$PAYLOAD_FILE" python3 -c "
+TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" TWORKTREE="${COLLAB_WORKTREE:-}" TEXPLICIT="$AGENTS_SOURCE" PFILE="$PAYLOAD_FILE" python3 -c "
 import json, os
 agents_str = os.environ.get('TAGENTS', '')
 if agents_str:
@@ -208,6 +208,9 @@ payload = {
 }
 if os.environ.get('TWORKTREE') == 'team':
     payload['worktree'] = 'team'
+# Een met de hand opgegeven ploeg mag de service niet aanvullen of omwisselen.
+if os.environ.get('TEXPLICIT') == 'explicit':
+    payload['agentsExplicit'] = True
 template = os.environ.get('TTEMPLATE', '').strip()
 if template:
     payload['templateName'] = template

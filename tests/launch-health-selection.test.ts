@@ -158,3 +158,21 @@ it('passes shell metacharacters in the task literally', () => {
 it('preserves the preflight failure code', () => {
   expect(run({ preflightExit: '7' }).result.status).toBe(7)
 })
+
+it('preserves the startup-dialog failure code', () => {
+  expect(run({ preflightExit: '9' }).result.status).toBe(9)
+})
+
+// 03-11-2026: gestart met "codex,claude", vier agents aan het werk. De
+// launcher deed het goed, maar het team wist niet dat de ploeg met de hand was
+// samengesteld, dus de service vulde hem vier minuten later aan met agy en glm.
+it('tells the team that a named line-up may not be substituted', () => {
+  const { payload } = run({ agents: 'codex,claude' })
+  expect(payload.agents.map((agent: {program: string}) => agent.program)).toEqual(['codex', 'claude'])
+  expect(payload.agentsExplicit).toBe(true)
+})
+
+it('leaves the field off when the line-up came from a plan or the default', () => {
+  expect(run({ configPlan: true }).payload.agentsExplicit).toBeUndefined()
+  expect(run({ envAgents: 'agy,mimo', noPlan: true }).payload.agentsExplicit).toBeUndefined()
+})

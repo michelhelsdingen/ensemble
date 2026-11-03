@@ -33,6 +33,18 @@ export async function replaceTeamAgent(
     const team = getTeam(teamId)
     const old = team?.agents.find(a => a.name === agentName)
     if (!config.replaceStalledAgents || !team || team.status !== 'active' || !old || old.status !== 'active') return false
+    // A roster the caller spelled out is not ours to change. On 03-11-2026 a
+    // run started as "codex,claude" and four agents were running: the service
+    // had quietly added agy and glm as replacements, one of which announced
+    // itself as "replaces claude-2" four minutes after the launcher had already
+    // reported the start as failed.
+    if (team.agentsExplicit) {
+      appendMessage(teamId, {
+        id: uuidv4(), teamId, from: 'ensemble', to: 'team', type: 'chat', timestamp: new Date().toISOString(),
+        content: `${agentName} stalled (${detail}) and was not replaced: you named the agents yourself. Fix that agent, or launch again with a different line-up.`,
+      })
+      return false
+    }
     if ((team.replacementCount ?? 0) >= (config.maxReplacementsPerTeam ?? 2)) return false
     const candidates = config.fallbackOrder.filter(key => availableAgentKeys().includes(key) && !team.agents.some(a => resolveAgentProgram(a.program) === resolveAgentProgram(key)))
     const roster = await runRoster(config)

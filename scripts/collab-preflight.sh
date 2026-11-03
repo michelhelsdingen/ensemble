@@ -128,17 +128,33 @@ if [ "${COLLAB_SKIP_STARTPROBE:-0}" = "1" ]; then
 elif ! command -v tmux > /dev/null 2>&1; then
   warn "Startdialoog-probe overgeslagen: tmux niet gevonden"
 else
-  STARTPROBE_CMD="${COLLAB_STARTPROBE_CMD:-}"
-  if [ -z "$STARTPROBE_CMD" ]; then
-    if command -v node > /dev/null 2>&1 && [ -f "$SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs" ]; then
-      STARTPROBE_CMD="NODE_NO_WARNINGS=1 node --import $SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs $SCRIPT_DIR/agent-smoketest.ts"
-    fi
+  # Geen eval: de agentnamen komen van de aanroeper. Een naam als
+  # "codex; rm -rf ~" zou in een eval een commando worden, en de launcher geeft
+  # deze lijst ongefilterd door uit de skill.
+  STARTPROBE_ARGV=()
+  if [ -n "${COLLAB_STARTPROBE_CMD:-}" ]; then
+    STARTPROBE_ARGV=("$COLLAB_STARTPROBE_CMD")
+  elif command -v node > /dev/null 2>&1 && [ -f "$SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs" ]; then
+    STARTPROBE_ARGV=(node --import "$SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs" "$SCRIPT_DIR/agent-smoketest.ts")
   fi
-  if [ -z "$STARTPROBE_CMD" ]; then
+  STARTPROBE_TIMEOUT="${COLLAB_STARTPROBE_TIMEOUT:-25}"
+  case "$STARTPROBE_TIMEOUT" in
+    ''|*[!0-9]*) STARTPROBE_TIMEOUT=25 ;;
+  esac
+  STARTPROBE_KEYS=()
+  while IFS= read -r key; do
+    [ -z "$key" ] && continue
+    case "$key" in
+      *[!a-z0-9_-]*) warn "Startdialoog-probe slaat onbruikbare agentnaam over: ${key:0:40}" ;;
+      *) STARTPROBE_KEYS+=("$key") ;;
+    esac
+  done < <(printf '%s' "$REQUESTED_LC" | tr ',' '\n')
+  if [ "${#STARTPROBE_ARGV[@]}" -eq 0 ]; then
     warn "Startdialoog-probe overgeslagen: node of tsx niet beschikbaar"
+  elif [ "${#STARTPROBE_KEYS[@]}" -eq 0 ]; then
+    warn "Startdialoog-probe overgeslagen: geen bruikbare agentnamen"
   else
-    STARTPROBE_KEYS=$(printf '%s' "$REQUESTED_LC" | tr ',' ' ')
-    STARTPROBE_OUT=$(eval "$STARTPROBE_CMD $STARTPROBE_KEYS --timeout ${COLLAB_STARTPROBE_TIMEOUT:-25}" 2>/dev/null) || true
+    STARTPROBE_OUT=$(NODE_NO_WARNINGS=1 "${STARTPROBE_ARGV[@]}" "${STARTPROBE_KEYS[@]}" --timeout "$STARTPROBE_TIMEOUT" 2>/dev/null) || true
     # Alleen 'blocked' is een blokkade. Een trage of ontbrekende agent wordt
     # verderop al afgehandeld; die mag hier geen team tegenhouden.
     STARTPROBE_BLOCKED=$(printf '%s' "$STARTPROBE_OUT" | python3 -c "

@@ -76,3 +76,21 @@ describe('preflight startprobe', () => {
     expect(output).toContain('Geen startdialoog in de weg')
   }, 90_000)
 })
+
+describe('preflight startprobe argumenten', () => {
+  it('voert een agentnaam niet uit als shell-commando', async () => {
+    // De agentlijst komt van de aanroeper. Een naam met een puntkomma mag geen
+    // commando worden; hij hoort te worden overgeslagen met een melding.
+    const bewijs = path.join(root, 'uitgevoerd')
+    const stub = path.join(root, 'startprobe')
+    fs.writeFileSync(stub, '#!/bin/bash\nprintf "%s" "$*" > "$1.args" 2>/dev/null || true\necho "{}"\n', { mode: 0o755 })
+    try {
+      await execFileAsync(preflight, [`codex; touch ${bewijs}`], {
+        env: { ...process.env, COLLAB_STARTPROBE_CMD: stub },
+        encoding: 'utf8',
+        timeout: 60_000,
+      })
+    } catch { /* de dure checks verderop mogen falen */ }
+    expect(fs.existsSync(bewijs)).toBe(false)
+  }, 90_000)
+})

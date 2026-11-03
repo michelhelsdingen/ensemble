@@ -13,6 +13,12 @@ export interface EnsembleTeam {
   worktreePath?: string
   worktreeBranch?: string
   replacementCount?: number
+  /**
+   * The caller named the agents, so nobody substitutes one. Without this,
+   * a stalled agent was replaced by whatever the fallback order offered: on
+   * 03-11-2026 a run started as "codex,claude" ended up with agy and glm.
+   */
+  agentsExplicit?: boolean
   result?: EnsembleTeamResult
 }
 
@@ -62,6 +68,8 @@ export interface CreateTeamRequest {
   useWorktrees?: boolean
   staged?: boolean
   stagedConfig?: StagedWorkflowConfig
+  /** Set by a caller that named its agents: no replacements, no fallback. */
+  agentsExplicit?: boolean
 }
 
 export type StagedPhase = 'plan' | 'exec' | 'verify'

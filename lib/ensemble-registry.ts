@@ -145,6 +145,7 @@ export function createTeam(request: CreateTeamRequest): EnsembleTeam {
       createdBy: getCreatedBy(),
       createdAt: new Date().toISOString(),
       feedMode: request.feedMode || 'live',
+      ...(request.agentsExplicit && { agentsExplicit: true }),
     }
     teams.push(team)
     writeTeamsFile(teams)
