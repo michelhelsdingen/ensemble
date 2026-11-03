@@ -47,7 +47,11 @@ for RUN in $(seq 1 "$RUNS"); do
   UITVOER=$(mktemp "${TMPDIR:-/tmp}/collab-smoke-out-XXXXXX")
   RUN_OK=1
 
-  COLLAB_MONITOR=none COLLAB_SKIP_POSTCHECK=1 \
+  # Postcheck blijft gearmeerd: de proef moet het pad lopen dat een echt team
+  # loopt. Nagekeken op 03-11-2026 dat hij een langzamer startend team niet
+  # doodt: hij grijpt alleen in bij fatale paneteksten (niet ingelogd, DNS,
+  # 401) en adviseert bij stilte alleen een rescue.
+  COLLAB_MONITOR=none \
     "$SCRIPT_DIR/collab-launch.sh" "$WERKMAP" "$TAAK" "$AGENTS" > "$UITVOER" 2>&1
   LAUNCH_EXIT=$?
   TEAM_ID=$(grep -o 'TEAM_ID=[0-9a-f-]*' "$UITVOER" | tail -1 | cut -d= -f2)
