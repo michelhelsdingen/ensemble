@@ -57,7 +57,7 @@ function team(delivery: Array<[string, string]>, sprekers: string[]) {
   })
 }
 
-function launch(teamJson: string, bridgeStuk = false, orphanSession = '') {
+function launch(teamJson: string, bridgeStuk = false, orphanSession = '', pollerStuk = false) {
   fs.rmSync(path.join(root, 'curl-aanroepen.log'), { force: true })
   // Geen oude pid-bestanden laten staan: de launcher kijkt of ze er zijn en of
   // dat proces nog leeft, en een pid uit een vorige test maakt de uitslag van
@@ -67,6 +67,9 @@ function launch(teamJson: string, bridgeStuk = false, orphanSession = '') {
   stub('ensemble-bridge.sh', bridgeStuk
     ? 'exit 1'
     : 'echo $$ > "$TEST_ROOT/$1/bridge.pid"; exec sleep 20')
+  stub('collab-poller.sh', pollerStuk
+    ? 'exit 0'
+    : 'echo $$ > "$TEST_ROOT/$1/poller.pid"; exec sleep 20')
   const deliveryFile = path.join(root, 'delivery.json')
   fs.writeFileSync(deliveryFile, teamJson)
   fs.mkdirSync(path.join(root, TEAM), { recursive: true })
@@ -141,5 +144,31 @@ describe('collab-launch ruimt op als hij halverwege stopt', () => {
       : ''
     expect(aanroepen).toMatch(new RegExp(`teams/${TEAM}/disband`))
     expect(run.out).toMatch(/opgeheven|opgeruimd/i)
+  }, 30_000)
+})
+
+/**
+ * Een poller die niet opkomt is geen reden om een werkend team weg te gooien.
+ *
+ * Gemeten 03-11-2026 in de rookproef: 1 van de 10 runs gaf "Poller stopte
+ * direct" en daarmee exit 4, terwijl de agents gewoon draaiden en het team
+ * daarna netjes werd opgeheven. De poller kopieert alleen berichten naar het
+ * feedbestand voor de monitor; het team werkt zonder hem. De bridge is een
+ * ander verhaal: zonder die komt er geen enkel bericht bij de API, dus die
+ * blijft een harde fout.
+ */
+describe('collab-launch weegt bridge en poller verschillend', () => {
+  it('gaat door als de poller niet opkomt, met een waarschuwing', () => {
+    const run = launch(
+      team([['codex-1', 'confirmed'], ['glm-2', 'confirmed']], ['codex-1', 'glm-2']),
+      false, '', true,
+    )
+    expect(run.out).toMatch(/poller/i)
+    expect(run.out).toContain('Team is live!')
+    expect(run.status).toBe(0)
+    const aanroepen = fs.existsSync(path.join(root, 'curl-aanroepen.log'))
+      ? fs.readFileSync(path.join(root, 'curl-aanroepen.log'), 'utf8')
+      : ''
+    expect(aanroepen).not.toMatch(new RegExp(`teams/${TEAM}/disband`))
   }, 30_000)
 })

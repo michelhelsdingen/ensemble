@@ -280,8 +280,17 @@ nohup "$SCRIPT_DIR/ensemble-bridge.sh" "$TEAM_ID" "$API" >> "$BRIDGE_LOG_FILE" 2
 # de bridge meteen stuksloeg op zijn health check en het team dus nooit een
 # bericht naar de API zou sturen. Kijken tot het pid-bestand er is, niet een
 # vaste 0,3 seconde: dat bestand staat er normaal binnen 30 milliseconden.
-for _ in $(seq 1 30); do [ -s "$BRIDGE_PID_FILE" ] && break; sleep 0.05; done
+BRIDGE_JOB=$!
+# Zelfde als bij de poller hieronder: eerst de job zelf, want het pid-bestand
+# kan net nog niet geschreven zijn, en wachten tot het proces er niet meer is
+# scheelt de volle wachttijd bij een bridge die echt omvalt.
+for _ in $(seq 1 60); do
+  [ -s "$BRIDGE_PID_FILE" ] && break
+  kill -0 "$BRIDGE_JOB" 2>/dev/null || break
+  sleep 0.05
+done
 BRIDGE_PID=$(cat "$BRIDGE_PID_FILE" 2>/dev/null || echo "")
+if [ -z "$BRIDGE_PID" ] && kill -0 "$BRIDGE_JOB" 2>/dev/null; then BRIDGE_PID="$BRIDGE_JOB"; fi
 if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
   echo -e "  ${CHECK} Bridge started ${D}(pid $BRIDGE_PID)${R}"
 else
@@ -426,15 +435,39 @@ nohup "$SCRIPT_DIR/collab-poller.sh" "$TEAM_ID" "$API" > /dev/null 2>&1 &
 # Zelfde controle als bij de bridge: zonder deze check kreeg de poller ook een
 # vinkje terwijl hij meteen kon zijn gestopt (bijvoorbeeld omdat $RUNTIME_DIR
 # nog niet bestond op het moment dat hij zijn pid-bestand probeerde te zetten).
-for _ in $(seq 1 30); do [ -s "$POLLER_PID_FILE" ] && break; sleep 0.05; done
-POLLER_PID=$(cat "$POLLER_PID_FILE" 2>/dev/null || echo "")
+POLLER_JOB=$!
+# Eerst op de job zelf kijken, dan op het pid-bestand: de poller verwijdert dat
+# bestand in zijn EXIT-trap, dus een race leest 'm net niet. Gemeten 03-11-2026
+# schrijft hij het binnen 45 tot 85 milliseconden; drie seconden is dus ruim,
+# ook als de machine vol staat met teams.
+for _ in $(seq 1 60); do
+  [ -s "$POLLER_PID_FILE" ] && break
+  kill -0 "$POLLER_JOB" 2>/dev/null || break
+  sleep 0.05
+done
+POLLER_PID=$(cat "$POLLER_PID_FILE" 2>/dev/null || echo "$POLLER_JOB")
 if [ -n "$POLLER_PID" ] && kill -0 "$POLLER_PID" 2>/dev/null; then
   echo -e "  ${CHECK} Poller started ${D}(pid $POLLER_PID)${R}"
 else
-  echo -e "  \033[91m✗${R} Poller stopte direct" >&2
-  ruim_team_op
-  print_team_id_trailer
-  exit 4
+  # Geen harde fout meer. De poller kopieert alleen berichten naar het
+  # feedbestand voor de monitor; de agents werken zonder hem, en de bridge (die
+  # de berichten naar de API brengt) is wel een harde eis. Gemeten 03-11-2026
+  # viel 1 van de 10 rookproeven om op deze check, waarna een werkend team werd
+  # opgeheven met de melding dat het niet gestart was.
+  echo -e "  \033[93m!${R} Poller kwam niet op; ik probeer het nog één keer" >&2
+  nohup "$SCRIPT_DIR/collab-poller.sh" "$TEAM_ID" "$API" > /dev/null 2>&1 &
+  POLLER_JOB=$!
+  for _ in $(seq 1 60); do
+    [ -s "$POLLER_PID_FILE" ] && break
+    kill -0 "$POLLER_JOB" 2>/dev/null || break
+    sleep 0.05
+  done
+  POLLER_PID=$(cat "$POLLER_PID_FILE" 2>/dev/null || echo "$POLLER_JOB")
+  if [ -n "$POLLER_PID" ] && kill -0 "$POLLER_PID" 2>/dev/null; then
+    echo -e "  ${CHECK} Poller started ${D}(pid $POLLER_PID, tweede poging)${R}"
+  else
+    echo -e "  \033[93m!${R} Poller blijft weg: de monitorfeed loopt achter, het team zelf werkt gewoon" >&2
+  fi
 fi
 
 # ─── 6. Wait for agents ───
