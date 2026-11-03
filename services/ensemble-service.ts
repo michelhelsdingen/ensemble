@@ -21,6 +21,7 @@ import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
 import { confirmLiveGate, detectLiveGate, isShellCommand } from '../lib/startup-gates'
 import { createReadyHold, READY_STABLE_MS, readyScreenState } from '../lib/ready-screen'
+import { submitPastedPrompt } from '../lib/paste-followup'
 import { resolveAgentProgram, resolveAgentProgramDetailed, availableAgentKeys } from '../lib/agent-config'
 import { exportObservation, checkMemoryEndpoint, type MemoryExportResult } from '../lib/memory-export'
 import { AgentWatchdog } from '../lib/agent-watchdog'
@@ -1025,6 +1026,21 @@ export async function createEnsembleTeam(
   // van te weigeren met "geen sessieregister" — precies het scenario waarvoor
   // rescue bedoeld is.
 
+  // Geen enkele agent gestart is geen actief team. Hiervoor ging de status toch
+  // op 'active' en kwam er een 201 terug, waarna Phase 2 en 3 werden
+  // overgeslagen en de launcher tot zijn bovengrens moest wachten om te zien dat
+  // er niets draaide (reviewteam 03-11-2026).
+  if (!team.agents.some(a => a.status === 'active')) {
+    team.status = 'failed'
+    updateTeam(team.id, { ...team, status: 'failed' })
+    appendMessage(team.id, {
+      id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+      content: `❌ Team start aborted: no agent could be started. See /tmp/ensemble-server.log for the spawn errors.`,
+      type: 'chat', timestamp: new Date().toISOString(),
+    })
+    return { data: { team }, status: 201 }
+  }
+
   team.status = 'active'
   updateTeam(team.id, { ...team, status: 'active' })
   teamEvent(team, 'team_started', { agents: team.agents.map(a => a.program), cwd: team.worktreePath || cwd, branch: team.worktreeBranch })
@@ -1187,6 +1203,10 @@ export async function createEnsembleTeam(
               await postRemoteSessionCommand(host.url, sessionName, prompt)
             } else {
               const agentCfg = resolveAgentProgram(agent.program)
+              const claude = agent.program.toLowerCase().includes('claude')
+              // Het beeld van vlak voor het verzenden, om straks te zien of de
+              // prompt is aangenomen of dat claude hem eerst samenvat.
+              const voorVerzenden = claude ? await runtime.capturePane(sessionName, 80).catch(() => '') : ''
               if (agentCfg.inputMethod === 'pasteFromFile') {
                 if (agent.program.toLowerCase().includes('codex')) {
                   await runtime.pasteFromFile(sessionName, promptFile, 5000)
@@ -1197,13 +1217,16 @@ export async function createEnsembleTeam(
                 const prompt = fs.readFileSync(promptFile, 'utf-8')
                 await runtime.sendKeys(sessionName, prompt, { literal: true, enter: true, agentInput: true })
               }
-              if (agent.program.toLowerCase().includes('claude')) {
-                for (const delayMs of [1500, 3000, 6000]) {
-                  await new Promise(resolve => setTimeout(resolve, delayMs))
-                  const pane = await runtime.capturePane(sessionName, 80)
-                  if (!/\[Pasted text/i.test(pane)) break
-                  await runtime.sendKeys(sessionName, 'Enter')
-                }
+              if (claude) {
+                // Hier stond een lus die eerst 1,5s sliep en daarna keek, en dat
+                // kostte elke start met een claude-agent minstens die anderhalve
+                // seconde, ook als de prompt al verzonden was. submitPastedPrompt
+                // kijkt eerst en houdt dezelfde tijden als bovengrens.
+                await submitPastedPrompt({
+                  before: voorVerzenden,
+                  capture: () => runtime.capturePane(sessionName, 80),
+                  sendEnter: () => runtime.sendKeys(sessionName, 'Enter'),
+                })
               }
             }
           }

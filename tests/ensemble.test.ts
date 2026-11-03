@@ -961,6 +961,21 @@ describe('worktree isolation lifecycle', () => {
     }
   }, 30_000)
 
+  it('zet een team op failed als geen enkele agent gespawnd kon worden', async () => {
+    // Gevonden door het reviewteam van 03-11-2026 (team 40d536c0): als alle
+    // spawns faalden zette de service het team toch op 'active' en gaf 201
+    // terug, waarna Phase 2 en 3 werden overgeslagen. De launcher moest dan tot
+    // zijn bovengrens wachten om te zien dat er niets draaide.
+    const team = makeTeam({ agents: [makeTeam().agents[0]] })
+    const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+    mocks.spawnLocalAgent.mockRejectedValue(new Error('tmux weg'))
+    await mod.createEnsembleTeam({
+      name: team.name, description: team.description, agents: [{ program: 'codex' }],
+    })
+    expect(team.status).toBe('failed')
+    expect(appendedMessages.some(message => /no agent could be started/i.test(message.content))).toBe(true)
+  })
+
   it('marks an agent failed when normal team message delivery finds no agent', async () => {
     const team = makeTeam({ agents: [makeTeam().agents[0]] })
     const { mod, mocks } = await setupWorktreeService(team)
