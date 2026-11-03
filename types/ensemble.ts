@@ -30,6 +30,12 @@ export interface EnsembleTeamAgent {
   role: string
   hostId: string
   status: 'spawning' | 'active' | 'idle' | 'done' | 'failed' | 'replaced'
+  /**
+   * How far the prompt got. 'confirmed' means this agent has posted a message,
+   * which is the only proof its prompt was executed. The launcher waits on
+   * this instead of counting seconds.
+   */
+  delivery?: 'pending' | 'delivered' | 'confirmed' | 'failed'
   worktreePath?: string
   worktreeBranch?: string
 }

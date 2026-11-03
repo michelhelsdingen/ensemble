@@ -62,6 +62,8 @@ describe('sessieregister (service)', () => {
       loadTeams: vi.fn(() => []),
       appendMessage: vi.fn(),
       getMessages: vi.fn(() => []),
+      markAgentFailed: vi.fn(),
+      setAgentDelivery: vi.fn(),
     }))
     vi.doMock('../lib/agent-spawner', () => ({
       spawnLocalAgent: vi.fn(async ({ name }: { name: string }) => ({ id: `${name}-id` })),

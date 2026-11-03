@@ -90,8 +90,15 @@ instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the reco
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
 | 9 | Preflight found an agent waiting on a startup dialog (passed through) |
-| 3 | Team created but no message exchanged within the wait window |
+| 3 | Team created but the prompt never reached an agent, or nobody spoke within the wait window |
 | 4 | Bridge or poller process died immediately after starting |
+
+The launcher waits on evidence instead of on the clock. The service records per agent how far
+its prompt got (`pending`, `delivered`, `confirmed`, `failed`), where `confirmed` means that agent
+posted a message itself, and the launcher polls the team until everyone is confirmed or one has
+failed, up to `COLLAB_AGENT_WAIT_SECS` (120 by default). A failed delivery is reported within
+seconds rather than after a fixed window; against a service that does not know the field, the
+launcher falls back to counting messages against the session register.
 
 Every exit that happens after the team is created prints a `TEAM_ID=<id>` trailer, including the
 failing ones, so a caller can always find the runtime directory to investigate or rescue. Grep

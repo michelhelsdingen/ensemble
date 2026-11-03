@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { v4 as uuidv4 } from 'uuid'
-import type { EnsembleTeam, EnsembleMessage, CreateTeamRequest } from '../types/ensemble'
+import type { EnsembleTeam, EnsembleTeamAgent, EnsembleMessage, CreateTeamRequest } from '../types/ensemble'
 import { getEnsembleRegistryDir } from './ensemble-paths'
 import { emitEvent } from './brain-hooks'
 import { collabMessagesFile } from './collab-paths'
@@ -173,6 +173,24 @@ export function markAgentFailed(teamId: string, agentName: string): void {
     agent.status = 'failed'
     writeTeamsFile(teams)
     void emitEvent({ event: 'agent_failed', teamId, team: team!.name, agent: agentName, ts: new Date().toISOString(), detail: 'Agent failed' })
+  })
+}
+
+/**
+ * Record how far this agent's prompt got, so a caller can wait on evidence
+ * instead of on a timer. 'failed' and 'confirmed' are final.
+ */
+export function setAgentDelivery(
+  teamId: string, agentName: string, delivery: NonNullable<EnsembleTeamAgent['delivery']>,
+): void {
+  withTeamsLock(() => {
+    const teams = readTeamsFile()
+    const team = teams.find(team => team.id === teamId)
+    const agent = team?.agents.find(candidate => candidate.name === agentName)
+    if (!agent) return
+    if (agent.delivery === 'confirmed' || agent.delivery === 'failed') return
+    agent.delivery = delivery
+    writeTeamsFile(teams)
   })
 }
 

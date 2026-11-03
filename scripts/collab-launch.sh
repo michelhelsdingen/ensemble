@@ -415,7 +415,13 @@ else
 fi
 
 # ─── 6. Wait for agents ───
-AGENT_WAIT_SECS=12
+# Wachten op bewijs, niet op de klok. De service houdt per agent bij hoe ver de
+# prompt kwam (pending, delivered, confirmed, failed) en 'confirmed' betekent
+# dat die agent zelf een bericht heeft gestuurd. Hiervoor stond hier een vaste
+# 12 seconden met een blik op messages.jsonl: te vroeg voor een agent die nog
+# opstart, en veel te laat als de aflevering al was mislukt. Een service die
+# dit veld niet kent ('unknown') valt terug op de oude telling.
+AGENT_WAIT_SECS="${COLLAB_AGENT_WAIT_SECS:-120}"
 echo -ne "  ${SPIN} Agents spawning..."
 silent_agents() {
   python3 - "$RUNTIME_DIR/sessions" "$RUNTIME_DIR/prompts" "$MESSAGES_FILE" <<'PY'
@@ -455,17 +461,35 @@ for session in sessions:
         print(agent_name)
 PY
 }
+DELIVERY_STATE="unknown"
+DELIVERY_FAILED=""
 for _ in $(seq 1 "$AGENT_WAIT_SECS"); do
+  DELIVERY_STATE=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | team_delivery_state)
+  case "$DELIVERY_STATE" in
+    confirmed) break ;;
+    failed*) DELIVERY_FAILED="${DELIVERY_STATE#failed }"; break ;;
+    unknown)
+      # Een service zonder dit veld: terug naar de telling op het sessieregister.
+      SILENT_AGENTS=$(silent_agents)
+      if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then break; fi
+      ;;
+  esac
   sleep 1
-  SILENT_AGENTS=$(silent_agents)
-  [ -z "$SILENT_AGENTS" ] && break
 done
 MC=$(wc -l < "$MESSAGES_FILE" 2>/dev/null | tr -d ' ' || echo "0")
-SILENT_AGENTS=$(silent_agents)
-if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then
+if [ "$DELIVERY_STATE" = "confirmed" ]; then
+  SILENT_AGENTS=""
   echo -e "\r  ${CHECK} All agents communicating ${D}(${MC} messages)${R}"
+elif [ -n "$DELIVERY_FAILED" ]; then
+  SILENT_AGENTS=$(printf '%s\n' $DELIVERY_FAILED)
+  echo -e "\r  \033[91m✗${R} Prompt niet aangekomen bij: ${DELIVERY_FAILED}       "
 else
-  echo -e "\r  ${SPIN} Waiting for agent messages...       "
+  SILENT_AGENTS=$(silent_agents)
+  if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then
+    echo -e "\r  ${CHECK} All agents communicating ${D}(${MC} messages)${R}"
+  else
+    echo -e "\r  ${SPIN} Waiting for agent messages...       "
+  fi
 fi
 
 # ─── 6b. Postcheck (run in background after 30s — kills team if agents broken) ───
@@ -501,7 +525,11 @@ print(text if len(text) <= 31 else text[:30] + '…')
 if [ -z "$SILENT_AGENTS" ] && [ -s "$RUNTIME_DIR/sessions" ]; then
   echo -e "  ${BD}${G}Team is live!${R} ${W}${AGENT_NAMES}${R} are collaborating."
 else
-  echo -e "  ${BD}\033[93mNiet alle agents hebben binnen ${AGENT_WAIT_SECS}s een bericht gestuurd:${R}" >&2
+  if [ -n "$DELIVERY_FAILED" ]; then
+    echo -e "  ${BD}\033[93mDe prompt is niet aangekomen bij:${R}" >&2
+  else
+    echo -e "  ${BD}\033[93mNiet alle agents hebben binnen ${AGENT_WAIT_SECS}s een bericht gestuurd:${R}" >&2
+  fi
   while IFS= read -r agent; do [ -z "$agent" ] || echo "  - $agent" >&2; done <<< "$SILENT_AGENTS"
   echo -n "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
   while IFS= read -r agent; do [ -z "$agent" ] || printf ' %q' "$agent" >&2; done <<< "$SILENT_AGENTS"

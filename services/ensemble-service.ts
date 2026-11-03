@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type { EnsembleTeam, EnsembleMessage, CreateTeamRequest, CollabTemplatesFile } from '../types/ensemble'
 import {
   createTeam, getTeam, updateTeam, loadTeams,
-  appendMessage, getMessages, markAgentFailed,
+  appendMessage, getMessages, markAgentFailed, setAgentDelivery,
 } from '../lib/ensemble-registry'
 import {
   spawnLocalAgent, killLocalAgent,
@@ -1055,6 +1055,7 @@ export async function createEnsembleTeam(
       console.error(`[Ensemble] ${b.sessionName} blocked by dialog: ${b.blocked}`)
       b.agent.status = 'failed'
       markAgentFailed(team.id, b.agent.name)
+      setAgentDelivery(team.id, b.agent.name, 'failed')
       teamEvent(team, 'agent_failed', { agent: b.agent.name, detail: `blocked by dialog: ${b.blocked}` })
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
@@ -1204,11 +1205,14 @@ export async function createEnsembleTeam(
             }
           }
           try {
+            setAgentDelivery(team.id, agent.name, 'pending')
             await deliverChecked()
+            setAgentDelivery(team.id, agent.name, 'delivered')
             console.log(`[Ensemble] Prompt submitted to ${sessionName}; awaiting agent message`)
             return { agent, sessionName, deliver: deliverChecked }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
+            setAgentDelivery(team.id, agent.name, 'failed')
             if (err instanceof Error && err.name === 'AgentNotRunningError') {
               agent.status = 'failed'
               markAgentFailed(team.id, agent.name)
@@ -1240,8 +1244,10 @@ export async function createEnsembleTeam(
           },
         }).then(confirmed => {
           if (confirmed) {
+            setAgentDelivery(team.id, agent.name, 'confirmed')
             console.log(`[Ensemble] Prompt confirmed by message from ${agent.name}`)
           } else {
+            setAgentDelivery(team.id, agent.name, 'failed')
             console.error(`[Ensemble] Prompt unconfirmed after 3 attempts: ${agent.name} (${sessionName})`)
             appendMessage(team.id, {
               id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
@@ -1251,6 +1257,7 @@ export async function createEnsembleTeam(
           }
         }).catch(err => {
           const reason = err instanceof Error ? err.message : String(err)
+          setAgentDelivery(team.id, agent.name, 'failed')
           console.error(`[Ensemble] Prompt verification failed for ${agent.name}:`, reason)
           appendMessage(team.id, {
             id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',

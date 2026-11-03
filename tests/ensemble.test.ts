@@ -270,6 +270,7 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
         if (agent) agent.status = 'failed'
         return team
       }),
+      setAgentDelivery: vi.fn(),
       createTeam: vi.fn(),
       getTeam: vi.fn(() => team),
       saveTeams: vi.fn(),
@@ -750,6 +751,7 @@ describe('worktree isolation lifecycle', () => {
       appendMessage,
       getMessages: vi.fn(() => []),
       markAgentFailed,
+      setAgentDelivery: vi.fn(),
     }))
     vi.doMock('../lib/agent-spawner', () => ({
       spawnLocalAgent,
@@ -1219,6 +1221,7 @@ describe('staged workflow integration', () => {
       appendMessage: vi.fn(),
       getMessages: vi.fn(() => []),
       markAgentFailed: vi.fn(),
+      setAgentDelivery: vi.fn(),
     }))
     vi.doMock('../lib/agent-spawner', () => ({
       spawnLocalAgent: vi.fn(async ({ name, program, workingDirectory, hostId }) => ({
@@ -1468,6 +1471,7 @@ describe('cleanupStaleTeams stopt achtergebleven processen', () => {
       appendMessage: vi.fn(),
       getMessages: vi.fn(() => []),
       markAgentFailed: vi.fn(),
+      setAgentDelivery: vi.fn(),
     }))
     vi.doMock('../lib/agent-spawner', () => ({
       spawnLocalAgent: vi.fn(),

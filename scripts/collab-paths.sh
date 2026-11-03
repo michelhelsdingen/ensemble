@@ -157,3 +157,38 @@ stop_team_processes() {
     rm -f "$rd/$naam.pid"
   done
 }
+
+# Beoordeel hoe ver de prompts van een team zijn, uit het team-JSON op stdin.
+#
+# Echoot één van:
+#   confirmed        elke meetellende agent heeft een bericht gestuurd
+#   failed <namen>   minstens één aflevering is mislukt
+#   pending          nog onderweg
+#   unknown          geen bruikbaar antwoord, of een service zonder dit veld
+#
+# Tot 03-11-2026 wachtte de launcher 12 seconden en keek dan naar
+# messages.jsonl. Dat is te vroeg voor een agent die nog opstart en veel te
+# laat als de aflevering al was mislukt. Agents met status replaced, failed of
+# done tellen niet mee: die gaan niets meer sturen.
+team_delivery_state() {
+  python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print('unknown'); sys.exit(0)
+team = data.get('team', data) if isinstance(data, dict) else {}
+agents = team.get('agents') if isinstance(team, dict) else None
+if not isinstance(agents, list):
+    print('unknown'); sys.exit(0)
+telt = [a for a in agents if isinstance(a, dict) and a.get('status') not in ('replaced', 'done')]
+if not telt or not any(a.get('delivery') for a in telt):
+    print('unknown'); sys.exit(0)
+mislukt = [a.get('name', '?') for a in telt if a.get('delivery') == 'failed']
+if mislukt:
+    print('failed ' + ' '.join(mislukt)); sys.exit(0)
+if all(a.get('delivery') == 'confirmed' for a in telt):
+    print('confirmed'); sys.exit(0)
+print('pending')
+" 2>/dev/null || printf 'unknown\n'
+}
