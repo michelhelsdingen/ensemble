@@ -58,8 +58,46 @@ wants() {
 
 R='\033[0m'; RED='\033[91m'; GRN='\033[92m'; YEL='\033[93m'; BD='\033[1m'
 
+# Welke agents wachten op een dialoog? Leest het bestand dat de achtergrond-
+# probe uit sectie 0 vult. Leeg antwoord = niets in de weg (of nog niets bekend).
+startprobe_blocked() {
+  [ -n "${STARTPROBE_FILE:-}" ] || return 0
+  [ -s "$STARTPROBE_FILE" ] || return 0
+  python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as bron:
+        data = json.load(bron)
+except Exception:
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
+for key, res in data.items():
+    if isinstance(res, dict) and res.get('status') == 'blocked':
+        detail = ' '.join(str(res.get('detail', '')).split())[:220]
+        print(f'{key}: {detail}')
+" "$STARTPROBE_FILE" 2>/dev/null || true
+}
+
+# Wacht de probe uit en meld een dialoog als extra regel. Alleen voor het pad
+# waarin een ANDERE check al faalt; sectie 5b doet het oordeel zelf.
+startprobe_report() {
+  [ -n "${STARTPROBE_PID:-}" ] || return 0
+  wait "$STARTPROBE_PID" 2>/dev/null || true
+  local blocked
+  blocked="$(startprobe_blocked)"
+  STARTPROBE_PID=""
+  [ -n "$blocked" ] || return 0
+  echo -e "  ${RED}✗${R} En een agent wacht op een dialoog die alleen jij mag beantwoorden:" >&2
+  printf '%s\n' "$blocked" | sed 's/^/     /' >&2
+}
+
 fail() {
   local code=$1; shift
+  # De startdialoog-probe loopt op de achtergrond. Faalt er eerst iets anders,
+  # dan wachten we hem hier alsnog uit en melden we de dialoog erbij: anders
+  # fix je de ene fout, start je opnieuw en loop je pas dán tegen de dialoog aan.
+  startprobe_report
   echo -e "  ${RED}✗${R} $*" >&2
   exit "$code"
 }
@@ -142,7 +180,12 @@ else
     ''|*[!0-9]*) STARTPROBE_TIMEOUT=25 ;;
   esac
   STARTPROBE_KEYS=()
-  while IFS= read -r key; do
+  # `|| [ -n "$key" ]`: zonder dat slaat bash de laatste naam over, want die
+  # komt zonder regeleinde uit de printf hieronder en `read` geeft dan een
+  # nul-ongelijke exit nadat hij de variabele al heeft gevuld. Gemeten
+  # 03-11-2026: `collab-preflight.sh grok` probede niemand en `glm,grok`
+  # alleen glm.
+  while IFS= read -r key || [ -n "$key" ]; do
     [ -z "$key" ] && continue
     case "$key" in
       *[!a-z0-9_-]*) warn "Startdialoog-probe slaat onbruikbare agentnaam over: ${key:0:40}" ;;
@@ -154,29 +197,15 @@ else
   elif [ "${#STARTPROBE_KEYS[@]}" -eq 0 ]; then
     warn "Startdialoog-probe overgeslagen: geen bruikbare agentnamen"
   else
-    STARTPROBE_OUT=$(NODE_NO_WARNINGS=1 "${STARTPROBE_ARGV[@]}" "${STARTPROBE_KEYS[@]}" --timeout "$STARTPROBE_TIMEOUT" 2>/dev/null) || true
-    # Alleen 'blocked' is een blokkade. Een trage of ontbrekende agent wordt
-    # verderop al afgehandeld; die mag hier geen team tegenhouden.
-    STARTPROBE_BLOCKED=$(printf '%s' "$STARTPROBE_OUT" | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-if not isinstance(data, dict):
-    sys.exit(0)
-for key, res in data.items():
-    if isinstance(res, dict) and res.get('status') == 'blocked':
-        detail = ' '.join(str(res.get('detail', '')).split())[:220]
-        print(f'{key}: {detail}')
-" 2>/dev/null || echo "")
-    if [ -n "$STARTPROBE_BLOCKED" ]; then
-      fail 9 "Een agent wacht op een dialoog die alleen jij mag beantwoorden:
-$(printf '%s\n' "$STARTPROBE_BLOCKED" | sed 's/^/     /')
-     Start die CLI eenmalig in een gewone terminal, beantwoord de vraag, en
-     start het team daarna opnieuw. Wegklikken doen we niet voor je."
-    fi
-    ok "Geen startdialoog in de weg (${REQUESTED_AGENTS})"
+    # Deze probe start echte CLI's en kost op deze machine zo'n zes seconden,
+    # terwijl hij niets nodig heeft van de checks hieronder en zij niets van
+    # hem. Hij loopt dus mee op de achtergrond; de uitslag wordt uitgelezen in
+    # sectie 5b, vóór er ook maar één agent wordt gekozen. Eigen tmux-socket, dus
+    # geen botsing met de DNS- en auth-checks die ook tmux gebruiken.
+    STARTPROBE_FILE="$(mktemp)"
+    NODE_NO_WARNINGS=1 "${STARTPROBE_ARGV[@]}" "${STARTPROBE_KEYS[@]}" --timeout "$STARTPROBE_TIMEOUT" \
+      > "$STARTPROBE_FILE" 2>/dev/null &
+    STARTPROBE_PID=$!
   fi
 fi
 
@@ -717,6 +746,25 @@ else
     warn "Claude auth-probe inconclusive (probe output: ${CLAUDE_PROBE:0:120})"
     CLAUDE_DEAD=1
   fi
+fi
+
+# ─── 5b. Uitslag van de startdialoog-probe (gestart in sectie 0) ───
+# Hier wachten we hem uit, vóór de agentkeuze. Alleen 'blocked' is een
+# blokkade: een trage of ontbrekende agent wordt hierboven al afgehandeld en
+# mag geen team tegenhouden.
+if [ -n "${STARTPROBE_PID:-}" ]; then
+  wait "$STARTPROBE_PID" 2>/dev/null || true
+  STARTPROBE_BLOCKED="$(startprobe_blocked)"
+  STARTPROBE_PID=""
+  rm -f "$STARTPROBE_FILE"
+  STARTPROBE_FILE=""
+  if [ -n "$STARTPROBE_BLOCKED" ]; then
+    fail 9 "Een agent wacht op een dialoog die alleen jij mag beantwoorden:
+$(printf '%s\n' "$STARTPROBE_BLOCKED" | sed 's/^/     /')
+     Start die CLI eenmalig in een gewone terminal, beantwoord de vraag, en
+     start het team daarna opnieuw. Wegklikken doen we niet voor je."
+  fi
+  ok "Geen startdialoog in de weg (${REQUESTED_AGENTS})"
 fi
 
 # ─── Decide which agents to spawn ───
