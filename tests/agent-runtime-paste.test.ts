@@ -48,6 +48,7 @@ describe('pasteFromFile', () => {
     callLog.length = 0
     customHandler.fn = null
     execFileMock.mockClear()
+    vi.restoreAllMocks()
   })
 
   it('plakt niet opnieuw als alleen de tweede Enter faalt', async () => {
@@ -77,15 +78,59 @@ describe('pasteFromFile', () => {
     expect(sendKeysCalls.length).toBe(2)
   })
 
-  it('waits for the requested paste settling time before submitting', async () => {
+  /**
+   * De wachttijd voor de Enter was een klok: 1 seconde, en voor codex 5. Die 5
+   * kwam uit de aanname "sommige TUI's
+   * hebben meer tijd nodig", niet uit een meting, en kostte elke teamstart met
+   * codex erin ruim vijf seconden. Het is nu een conditie met diezelfde tijd
+   * als bovengrens: zodra de pane de paste toont, mag de Enter.
+   */
+  it('stuurt Enter zodra de pane de paste toont', async () => {
     vi.useFakeTimers()
     try {
       customHandler.fn = () => null
       const runtime = new TmuxRuntime()
+      let beeld = '> leeg invoerveld'
+      vi.spyOn(runtime, 'capturePane').mockImplementation(async () => beeld)
       const delivery = runtime.pasteFromFile('sess', '/tmp/x.txt', 5000)
-      await vi.advanceTimersByTimeAsync(4999)
+      await vi.advanceTimersByTimeAsync(200)
       expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(0)
-      await vi.advanceTimersByTimeAsync(301)
+      beeld = '> de geplakte opdracht staat in het invoerveld'
+      await vi.advanceTimersByTimeAsync(400)
+      expect(callLog.filter(c => c.includes('send-keys')).length).toBeGreaterThan(0)
+      await vi.advanceTimersByTimeAsync(400)
+      await delivery
+      expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wacht nooit langer dan de opgegeven tijd, ook als de pane niets laat zien', async () => {
+    vi.useFakeTimers()
+    try {
+      customHandler.fn = () => null
+      const runtime = new TmuxRuntime()
+      vi.spyOn(runtime, 'capturePane').mockImplementation(async () => '> leeg invoerveld')
+      const delivery = runtime.pasteFromFile('sess', '/tmp/x.txt', 2000)
+      await vi.advanceTimersByTimeAsync(1900)
+      expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(500)
+      await delivery
+      expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stuurt de Enter ook als de pane niet te lezen is', async () => {
+    vi.useFakeTimers()
+    try {
+      customHandler.fn = () => null
+      const runtime = new TmuxRuntime()
+      vi.spyOn(runtime, 'capturePane').mockRejectedValue(new Error('geen pane'))
+      const delivery = runtime.pasteFromFile('sess', '/tmp/x.txt', 1000)
+      await vi.advanceTimersByTimeAsync(1500)
       await delivery
       expect(callLog.filter(c => c.includes('send-keys'))).toHaveLength(2)
     } finally {

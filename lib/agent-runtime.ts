@@ -315,6 +315,10 @@ export class TmuxRuntime implements AgentRuntime {
     const sName = this.sanitizeName(name)
     // Pasting is only ever used for agent input, never for shell commands.
     await this.assertAgentInForeground(name)
+    // Het beeld van voor de paste, om straks te zien wanneer de TUI hem heeft
+    // verwerkt. Lukt het lezen niet, dan valt de wachtlus hieronder terug op de
+    // klok.
+    const beeldVoor = await this.capturePane(name, 20).catch(() => null)
     const safePath = escapeTmuxArg(filePath)
     const callId = randomUUID()
 
@@ -355,7 +359,14 @@ export class TmuxRuntime implements AgentRuntime {
     // dezelfde pane. Give TUI time to process the paste, then send Enter twice
     // (some TUIs like Gemini CLI need an extra Enter after paste); een
     // mislukte Enter wordt gelogd maar triggert geen nieuwe paste.
-    await new Promise(r => setTimeout(r, submitDelayMs))
+    // Wachten tot de pane de paste toont, met submitDelayMs als bovengrens.
+    // Dit was een vaste wachttijd: 1 seconde, en 5 voor codex. Die 5 kwam
+    // uit de aanname dat sommige TUI's meer
+    // tijd nodig hebben, niet uit een meting, en kostte elke teamstart met codex
+    // erin ruim vijf seconden. De paste zit na paste-buffer al in de pty-stroom,
+    // dus een Enter erachter komt nooit voor de tekst aan; we wachten alleen tot
+    // de TUI hem heeft laten zien.
+    await this.wachtOpPaste(name, beeldVoor, submitDelayMs)
     for (const wacht of [0, 300]) {
       if (wacht) await new Promise(r => setTimeout(r, wacht))
       try {
@@ -363,6 +374,26 @@ export class TmuxRuntime implements AgentRuntime {
       } catch (err) {
         console.error(`[runtime] Enter naar ${sName} mislukte:`, err)
       }
+    }
+  }
+
+  /**
+   * Wacht tot de pane iets anders laat zien dan voor de paste, en dus de
+   * invoer heeft verwerkt. Valt terug op de volle wachttijd als de pane niet
+   * te lezen is of niets verandert.
+   */
+  private async wachtOpPaste(name: string, beeldVoor: string | null, maxWachtMs: number): Promise<void> {
+    const ondergrens = Math.min(150, maxWachtMs)
+    await new Promise(r => setTimeout(r, ondergrens))
+    if (beeldVoor === null) {
+      await new Promise(r => setTimeout(r, Math.max(0, maxWachtMs - ondergrens)))
+      return
+    }
+    const deadline = Date.now() + maxWachtMs - ondergrens
+    while (Date.now() < deadline) {
+      const nu = await this.capturePane(name, 20).catch(() => null)
+      if (nu === null || nu !== beeldVoor) return
+      await new Promise(r => setTimeout(r, Math.min(150, Math.max(1, deadline - Date.now()))))
     }
   }
 
