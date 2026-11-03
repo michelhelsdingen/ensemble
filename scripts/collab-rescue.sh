@@ -84,7 +84,7 @@ PY
 agent_requested() {
   [ "${#REQUESTED_AGENTS[@]}" -eq 0 ] && return 0
   local requested
-  for requested in "${REQUESTED_AGENTS[@]}"; do
+  for requested in ${REQUESTED_AGENTS[@]+"${REQUESTED_AGENTS[@]}"}; do
     [ "$requested" = "$1" ] && return 0
   done
   return 1
@@ -124,31 +124,47 @@ deliver_to_session() {
     esac
   fi
 
+  # Het beeld van voor de paste, om straks te zien of de pane hem aannam.
+  local VOOR
+  VOOR="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
+
   local BUFNAME="rescue-${AGENT_NAME}-$$"
   tmux load-buffer -b "$BUFNAME" "$PROMPT_FILE"
   tmux paste-buffer -b "$BUFNAME" -t "$SESSION"
-  if [[ "$AGENT_NAME" == *codex* ]]; then sleep 5; else sleep 1; fi
-
-  # Eerste Enter na paste
-  tmux send-keys -t "$SESSION" Enter
-  sleep 1
-
-  # Claude toont vaak "[Pasted text" en wil extra Enter om te submitten
-  if [[ "$AGENT_NAME" == *claude* ]]; then
-    for delay in 1 2 3; do
-      sleep "$delay"
-      local pane
-      pane="$(tmux capture-pane -t "$SESSION" -p | tail -20)"
-      if [[ "$pane" == *"[Pasted text"* || "$pane" == *"paste again to expand"* ]]; then
-        tmux send-keys -t "$SESSION" Enter
-      else
-        break
-      fi
-    done
-  fi
-
   tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
-  echo "  $AGENT_NAME: prompt naar tmux gestuurd, wacht op agentbericht"
+
+  # Wachten tot de pane de paste toont, in plaats van een vaste 5 (codex) of 1
+  # seconde. Daarna de Enter; die komt in de pty-stroom achter de tekst aan.
+  local NU=""
+  local WACHT
+  for WACHT in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    NU="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
+    [ "$NU" != "$VOOR" ] && break
+    sleep 0.25
+  done
+  tmux send-keys -t "$SESSION" Enter
+
+  # Een CLI die een grote paste eerst samenvat ("[Pasted text ...]") wil nog een
+  # Enter. Kijken in plaats van vaste stappen van 1, 2 en 3 seconden, en dit
+  # geldt voor elke CLI die zo'n melding toont, niet alleen voor een agent met
+  # "claude" in zijn naam (rescue keek naar de naam, de service naar het
+  # programma: een glm-agent liep deze stap daardoor altijd mis).
+  local RONDE
+  for RONDE in 1 2 3; do
+    NU="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
+    case "$NU" in
+      *"[Pasted text"*|*"paste again to expand"*) tmux send-keys -t "$SESSION" Enter; sleep 0.5 ;;
+      *) break ;;
+    esac
+  done
+
+  # Nam de pane iets aan? Zo niet, dan helpt opnieuw plakken ook niet.
+  NU="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
+  if [ "$NU" = "$VOOR" ]; then
+    echo "  $AGENT_NAME: de pane heeft niets aangenomen (beeld onveranderd)" >&2
+    return 1
+  fi
+  echo "  $AGENT_NAME: prompt aangenomen door de pane, wacht op agentbericht"
 }
 
 echo "=== prompt-injectie ==="
@@ -189,33 +205,40 @@ while IFS= read -r SESSION; do
     echo "  $AGENT_NAME: heeft al $BEFORE bericht(en), geen rescue nodig"
     continue
   fi
+  # Aangenomen is afgeleverd. Hiervoor stond hier de lus die vandaag ook in de
+  # service is weggehaald: drie keer de hele prompt opnieuw plakken omdat de
+  # agent binnen 15 seconden nog niets had gezegd. Gemeten 03-11-2026 kostte dat
+  # glm 2m40s voor zijn eerste bericht, met drie kopieën van dezelfde opdracht.
+  # Een agent die nadenkt is geen mislukte aflevering.
+  if ! deliver_to_session "$SESSION" "$PROMPT_FILE" "$AGENT_NAME"; then
+    echo "  $AGENT_NAME: prompt NIET afgeleverd; inspecteer tmux attach -t $SESSION" >&2
+    FAILED=1
+    continue
+  fi
   CONFIRMED=0
-  for attempt in 1 2 3; do
-    if ! deliver_to_session "$SESSION" "$PROMPT_FILE" "$AGENT_NAME"; then
+  for _ in $(seq 1 20); do
+    AFTER=$(agent_messages "$AGENT_NAME")
+    if [ "$AFTER" -gt "$BEFORE" ]; then
+      CONFIRMED=1
       break
     fi
-    for _ in $(seq 1 15); do
-      AFTER=$(agent_messages "$AGENT_NAME")
-      if [ "$AFTER" -gt "$BEFORE" ]; then
-        CONFIRMED=1
-        break
-      fi
-      sleep 1
-    done
-    if [ "$CONFIRMED" -eq 1 ]; then break; fi
-    echo "  $AGENT_NAME: geen agentbericht na poging $attempt" >&2
+    sleep 1
   done
   if [ "$CONFIRMED" -eq 1 ]; then
     echo "  $AGENT_NAME: bevestigd door eigen bericht"
   else
-    echo "  $AGENT_NAME: NIET bevestigd na maximaal 3 pogingen; inspecteer tmux attach -t $SESSION" >&2
-    FAILED=1
+    echo "  $AGENT_NAME: prompt is aangekomen, nog geen bericht. Die denkt waarschijnlijk nog; kijk mee met tmux attach -t $SESSION"
   fi
 done < "$RD/sessions"
 
-for requested in "${REQUESTED_AGENTS[@]}"; do
+# ${A[@]+"${A[@]}"}: een lege array onder `set -u` is op bash 3.2 (de /bin/bash
+# van deze machine) een fatale "unbound variable". Deze lus crashte dus in de
+# gedocumenteerde standaardvorm van rescue, zonder agentnamen, en dat is precies
+# de vorm die de launcher en de postcheck aanraden. Gevonden en gereproduceerd
+# 03-11-2026; collab-cleanup.sh gebruikte deze veilige vorm al.
+for requested in ${REQUESTED_AGENTS[@]+"${REQUESTED_AGENTS[@]}"}; do
   FOUND=0
-  for matched in "${MATCHED[@]}"; do
+  for matched in ${MATCHED[@]+"${MATCHED[@]}"}; do
     if [ "$requested" = "$matched" ]; then FOUND=1; break; fi
   done
   if [ "$FOUND" -eq 0 ]; then

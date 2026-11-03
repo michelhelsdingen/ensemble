@@ -97,8 +97,82 @@ describe('rescue scope', () => {
     })
 
     expect(code).not.toBe(0)
-    expect(out).toContain('codex-1: NIET bevestigd')
-    expect(out).not.toContain('prompt afgeleverd')
+    // De melding heette "NIET bevestigd na maximaal 3 pogingen" toen rescue de
+    // prompt drie keer herplakte. Nu stopt hij bij de eerste pane die niets
+    // aanneemt; de strekking (geen succes, en de andere agent blijft ongemoeid)
+    // is dezelfde.
+    expect(out).toMatch(/codex-1: prompt NIET afgeleverd|codex-1: NIET bevestigd/)
+    expect(out).not.toContain('prompt afgeleverd\n')
     expect(fs.readFileSync(log, 'utf8')).not.toContain('team-stil-agy-2')
   })
+})
+
+/**
+ * De herstelroute zelf, gevonden door het reviewteam van 03-11-2026 (team
+ * 40d536c0) en nagemeten: `collab-rescue.sh <team-id>` zonder agentnamen is de
+ * gedocumenteerde standaardvorm en precies wat de launcher en de postcheck
+ * aanraden, en die vorm crashte op `REQUESTED_AGENTS[@]: unbound variable`
+ * (bash 3.2.57 is /bin/bash op deze machine). De bestaande tests riepen rescue
+ * wel zonder namen aan maar keken niet naar de exitcode, dus de crash bleef
+ * jaren groen.
+ */
+describe('rescue in zijn standaardvorm', () => {
+  /**
+   * Nep-tmux dat zich gedraagt als een echte pane: het beeld verandert zodra er
+   * een paste is geweest (tenzij reageertOpPaste uit staat, voor een pane die
+   * de invoer nergens laat landen). Een stub die het beeld op het AANTAL
+   * aanroepen baseert, meet niets: pane-ready.ts doet zelf ook een capture, dus
+   * dan lijkt de pane al veranderd voordat er geplakt is.
+   */
+  function nepTmux(bin: string, log: string, reageertOpPaste = true): void {
+    fs.mkdirSync(bin, { recursive: true })
+    const marker = '\u276f'
+    fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$*" >> "${log}"
+case "$1" in
+  capture-pane)
+    if ${reageertOpPaste ? 'true' : 'false'} && grep -q paste-buffer "${log}" 2>/dev/null; then
+      printf '%s\\n' "${marker} de prompt is binnen, aan het werk"
+    else
+      printf '%s\\n' "${marker} leeg invoerveld"
+    fi
+    ;;
+  has-session) exit 0 ;;
+esac
+exit 0
+`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  }
+
+  it('loopt zonder agentnamen netjes af in plaats van te crashen', () => {
+    makeTeam('team-standaard', ['team-standaard-glm-1'], { 'glm-1': 'prompt' })
+    const bin = path.join(root, 'bin')
+    const log = path.join(root, 'tmux.log')
+    nepTmux(bin, log)
+    const { out } = run(['team-standaard'], { PATH: `${bin}:${process.env.PATH}`, TEST_TMUX_LOG: log })
+    expect(out).not.toMatch(/unbound variable/)
+  }, 30_000)
+
+  it('plakt niet opnieuw als de pane de prompt heeft aangenomen', () => {
+    makeTeam('team-aangenomen', ['team-aangenomen-glm-1'], { 'glm-1': 'prompt' })
+    const bin = path.join(root, 'bin')
+    const log = path.join(root, 'tmux.log')
+    nepTmux(bin, log)
+    const { out, code } = run(['team-aangenomen'], { PATH: `${bin}:${process.env.PATH}`, TEST_TMUX_LOG: log })
+    const pastes = fs.readFileSync(log, 'utf8').split('\n').filter(regel => regel.startsWith('paste-buffer'))
+    expect(pastes.length).toBe(1)
+    expect(out).toMatch(/aangenomen|aangekomen/i)
+    expect(out).not.toMatch(/NIET afgeleverd/)
+    expect(code).toBe(0)
+  }, 30_000)
+
+  it('meldt het wel als een gereede pane niets aanneemt', () => {
+    makeTeam('team-dood', ['team-dood-glm-1'], { 'glm-1': 'prompt' })
+    const bin = path.join(root, 'bin')
+    const log = path.join(root, 'tmux.log')
+    nepTmux(bin, log, false)
+    const { out, code } = run(['team-dood'], { PATH: `${bin}:${process.env.PATH}`, TEST_TMUX_LOG: log })
+    expect(out).toMatch(/niets aangenomen/i)
+    expect(code).not.toBe(0)
+  }, 30_000)
 })
