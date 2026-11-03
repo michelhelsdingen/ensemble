@@ -30,6 +30,31 @@ function computeSessionName(agentName: string): string {
   return agentName.replace(/[^a-zA-Z0-9\-_.]/g, '')
 }
 
+/** Hoe lang we hoogstens op een verse sessie wachten, en hoe vaak we kijken. */
+const SESSION_WAIT_MS = 1_000
+const SESSION_POLL_MS = 25
+
+/**
+ * Wacht tot een net aangemaakte sessie zichtbaar is.
+ *
+ * Kan de runtime het niet zeggen (geen sessionExists, of een fout), dan gaan we
+ * na de bovengrens gewoon door: het startcommando sturen en falen is beter dan
+ * hier blijven staan, en de readiness-controle in de service vangt het verder.
+ */
+async function waitForSession(runtime: { sessionExists?: (name: string) => Promise<boolean> }, sessionName: string): Promise<void> {
+  if (!runtime.sessionExists) return
+  const deadline = Date.now() + SESSION_WAIT_MS
+  while (Date.now() < deadline) {
+    try {
+      if (await runtime.sessionExists(sessionName)) return
+    } catch {
+      await new Promise(r => setTimeout(r, SESSION_WAIT_MS))
+      return
+    }
+    await new Promise(r => setTimeout(r, SESSION_POLL_MS))
+  }
+}
+
 /**
  * Spawn a local agent: create tmux session + start the AI program
  */
@@ -43,8 +68,10 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   // Create tmux session
   await runtime.createSession(sessionName, cwd)
 
-  // Small delay for session init
-  await new Promise(r => setTimeout(r, 300))
+  // Wachten tot de sessie er echt is, niet een vaste 300ms. Gemeten 03-11-2026:
+  // de sessie bestaat op deze machine binnen 20ms, dus die 300ms was per agent
+  // puur wachttijd in de start van elk team.
+  await waitForSession(runtime, sessionName)
 
   // Start the AI program
   // Use 'nocorrect' to prevent zsh auto-correct prompt, and add leading space to avoid tmux swallowing first char
