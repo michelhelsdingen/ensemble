@@ -52,6 +52,11 @@ TAAK='Dit is een rookproef, geen onderzoek. Stuur met team-say precies één kor
 
 GESLAAGD=0
 MISLUKT=0
+# Startduur per run, voor de slotregel. Snelheid hoort bij de proef: gemeten
+# 03-11-2026 duurde een start 18 seconden plus een wachtlus van 120.
+LIVE_TIJDEN=""
+SPREEK_TIJDEN=""
+nu_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 
 for RUN in $(seq 1 "$RUNS"); do
   printf "\n  ${BD}rookproef %s/%s${R} ${D}(%s, monitor %s, sjabloon %s)${R}\n" \
@@ -64,9 +69,11 @@ for RUN in $(seq 1 "$RUNS"); do
   # loopt. Nagekeken op 03-11-2026 dat hij een langzamer startend team niet
   # doodt: hij grijpt alleen in bij fatale paneteksten (niet ingelogd, DNS,
   # 401) en adviseert bij stilte alleen een rescue.
+  BEGIN_MS=$(nu_ms)
   COLLAB_MONITOR="$MONITOR" \
     "$SCRIPT_DIR/collab-launch.sh" "$WERKMAP" "$TAAK" "$AGENTS" "$TEMPLATE" > "$UITVOER" 2>&1
   LAUNCH_EXIT=$?
+  LIVE_MS=$(( $(nu_ms) - BEGIN_MS ))
   TEAM_ID=$(grep -o 'TEAM_ID=[0-9a-f-]*' "$UITVOER" | tail -1 | cut -d= -f2)
 
   if [ -z "$TEAM_ID" ]; then
@@ -78,7 +85,8 @@ for RUN in $(seq 1 "$RUNS"); do
   fi
 
   if [ "$LAUNCH_EXIT" = "0" ]; then
-    pass "team live (exit 0)"
+    pass "team live (exit 0) in $(python3 -c "print(f'{$LIVE_MS/1000:.1f}')")s"
+    LIVE_TIJDEN="$LIVE_TIJDEN $LIVE_MS"
   else
     fout "launcher exit $LAUNCH_EXIT"
     sed 's/^/      /' "$UITVOER" | tail -15
@@ -86,6 +94,23 @@ for RUN in $(seq 1 "$RUNS"); do
   fi
 
   # Heen en weer: elke agent die het team startte moet zelf iets hebben gezegd.
+  # De launcher keert sinds 03-11-2026 terug zodra de prompt is aangekomen, dus
+  # hier wachten we op het eerste bericht van elke agent. Dat is denktijd van
+  # het model, geen starttijd van ensemble, en wordt apart gemeld.
+  SPREEK_GRENS="${COLLAB_SMOKE_SPREEK_SECS:-150}"
+  for _ in $(seq 1 "$SPREEK_GRENS"); do
+    STIL=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+team = data.get('team', {})
+namen = {a['name'] for a in team.get('agents', []) if a.get('status') != 'replaced'}
+sprekers = {m['from'] for m in data.get('messages', []) if m.get('from') in namen}
+print(' '.join(sorted(namen - sprekers)) or 'ALLEMAAL')
+" 2>/dev/null || echo "ONLEESBAAR")
+    [ "$STIL" = "ALLEMAAL" ] && break
+    sleep 1
+  done
+  SPREEK_MS=$(( $(nu_ms) - BEGIN_MS ))
   BERICHTEN=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -95,7 +120,8 @@ sprekers = {m['from'] for m in data.get('messages', []) if m.get('from') in name
 print(' '.join(sorted(namen - sprekers)) or 'ALLEMAAL')
 " 2>/dev/null || echo "ONLEESBAAR")
   if [ "$BERICHTEN" = "ALLEMAAL" ]; then
-    pass "elke agent heeft zelf een bericht gestuurd"
+    pass "elke agent heeft zelf een bericht gestuurd, na $(python3 -c "print(f'{$SPREEK_MS/1000:.1f}')")s"
+    SPREEK_TIJDEN="$SPREEK_TIJDEN $SPREEK_MS"
   else
     fout "geen bericht van: $BERICHTEN"
     RUN_OK=0
@@ -134,5 +160,17 @@ print(' '.join(sorted(namen - sprekers)) or 'ALLEMAAL')
   fi
 done
 
-printf "\n  ${BD}Uitslag${R}  %s geslaagd, %s mislukt van %s\n\n" "$GESLAAGD" "$MISLUKT" "$RUNS"
+printf "\n  ${BD}Uitslag${R}  %s geslaagd, %s mislukt van %s\n" "$GESLAAGD" "$MISLUKT" "$RUNS"
+samenvat() {
+  [ -n "$2" ] || return 0
+  python3 -c "
+import sys
+label = sys.argv[1]
+waarden = [int(v) / 1000 for v in sys.argv[2:]]
+print(f'  {label}: snelst {min(waarden):.1f}s, traagst {max(waarden):.1f}s, gemiddeld {sum(waarden) / len(waarden):.1f}s')
+" "$1" $2
+}
+samenvat "team live" "$LIVE_TIJDEN"
+samenvat "iedereen aan het woord" "$SPREEK_TIJDEN"
+printf "\n"
 [ "$MISLUKT" = "0" ]

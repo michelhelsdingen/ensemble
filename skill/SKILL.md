@@ -132,18 +132,16 @@ global file that a concurrent collab overwrites.
 
 **Check that the launch actually succeeded** before doing Step 2. `collab-launch.sh` can fail
 after the team already exists: exit `3` means a team was created but the prompt never reached an
-agent, or nobody spoke within the wait window; exit `4` means the bridge or poller died right
-after starting. Both print a `TEAM_ID=` trailer anyway, but neither one printed `Team is live!`.
-Only tell the user the team is live when that exact line is in the output.
+agent; exit `4` means the bridge or poller died right after starting. Both print a `TEAM_ID=`
+trailer anyway, but neither one printed `Team is live!`. Only tell the user the team is live when
+that exact line is in the output.
 
-On exit `3`, read the reason first. The launcher waits on the delivery state the service keeps
-per agent, so it says which of the two happened:
-
-- `Prompt niet aangekomen bij: <agent>` means the prompt was never taken. Rescue will not help
-  until the cause is gone; look at that agent's pane (`tmux attach -t <team-name>-<agent>`) and
-  report what is on it.
-- `Niet alle agents hebben binnen Ns een bericht gestuurd` means delivery worked and the agent
-  stayed quiet. Then run `"$ES/collab-rescue.sh" "$TEAM_ID"` before saying anything is running.
+**A quiet agent is not a failed start.** The launcher returns as soon as every pane has taken its
+prompt, so a successful launch can print `nog geen bericht van: <agent>`. That agent is thinking;
+the monitor will show its first message. Do not rescue it, do not relaunch, and do not tell the
+user something went wrong. Only `Prompt niet aangekomen bij: <agent>` (exit 3) is a real delivery
+failure: the pane took nothing. Rescue will not help until the cause is gone, so look at that
+pane (`tmux attach -t <team-name>-<agent>`) and report what is on it.
 
 **Exit `9` is not a fault to retry.** An agent CLI is sitting on a startup dialog that only the
 user may answer, and the message names the CLI and the dialog. Never answer such a dialog for

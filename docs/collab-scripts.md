@@ -90,15 +90,23 @@ instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the reco
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
 | 9 | Preflight found an agent waiting on a startup dialog (passed through) |
-| 3 | Team created but the prompt never reached an agent, or nobody spoke within the wait window |
+| 3 | Team created but the prompt never reached an agent |
 | 4 | Bridge or poller process died immediately after starting |
 
 The launcher waits on evidence instead of on the clock. The service records per agent how far
 its prompt got (`pending`, `delivered`, `confirmed`, `silent`, `failed`), where `confirmed` means
-that agent posted a message itself, and the launcher polls the team until everyone is confirmed or
-one has failed, up to `COLLAB_AGENT_WAIT_SECS` (120 by default). A failed delivery is reported
+that agent posted a message itself, and the launcher polls the team until the prompt has reached
+every agent, up to `COLLAB_AGENT_WAIT_SECS` (120 by default). A failed delivery is reported
 within seconds rather than after a fixed window; against a service that does not know the field,
 the launcher falls back to counting messages against the session register.
+
+**Arrived is started.** The launcher exits 0 as soon as every agent's pane has taken its prompt,
+whether or not each agent has spoken yet; the quiet ones are named in one dim line and the monitor
+shows the rest. Measured 03-11-2026 (team ee1b35b0): grok-2 answered within 20 seconds, glm-1 had
+taken its prompt and was working, and the launcher spent 120 seconds waiting before declaring
+"not all agents sent a message within 120s" with a rescue command, about a team that went on to
+finish its task. First-message latency is the model's thinking time, not a startup failure, and
+only `failed` (the pane took nothing) still gives exit 3.
 
 `silent` and `failed` are deliberately different. `failed` means the pane took nothing: a dialog,
 a dead CLI, a shell in the foreground. `silent` means the prompt was taken and the agent has not
@@ -131,7 +139,12 @@ wording, and used to be reported as healthy right before the agent spawned and s
 session.
 
 Before those checks, preflight starts every requested agent in a throwaway tmux session exactly
-as a team does, and refuses to launch (exit 9) when one of them is sitting on a dialog. The
+as a team does, and refuses to launch (exit 9) when one of them is sitting on a dialog. That probe
+runs in the background while the service, DNS and auth checks do their work, and is judged in
+section 5b just before the line-up is chosen: it costs about five seconds of real CLI startup, and
+running it serially was most of preflight's eight seconds. If another check fails first, `fail`
+waits for the probe anyway and names the dialog alongside that error, so you do not fix one thing,
+relaunch, and only then meet the dialog. The
 `codex exec` check above cannot see this: `exec` has no TUI. Measured 03-11-2026, codex 0.164.0
 opened a modal "Hooks need review" whose selection arrow is its own readyMarker, so preflight
 was green, the team launched, the prompt was pasted into the dialog three times and nobody said
@@ -191,14 +204,21 @@ that register (an older team, or one that failed before a single agent spawned) 
 nothing to check and exits `0` without touching anything.
 
 After the wait, it captures each of those panes and greps for known fatal patterns ("Not logged
-in", a DNS/network failure, an auth error). If it finds one, or if zero messages were exchanged
-in the wait window, it kills only this team's sessions and prints the diagnosis.
+in", a DNS/network failure, an auth error). If it finds one it kills only this team's sessions and
+prints the diagnosis.
+
+For silence it asks the service, not the clock: the same per-agent delivery state the launcher
+uses. `delivered`/`silent` means the pane took the prompt, so postcheck says so and exits 0,
+naming anyone who has not spoken yet as thinking, not broken. Only `failed`, or a service that
+cannot tell (then it falls back to counting messages), produces the complaint and the rescue
+hint. Measured 03-11-2026: 30 seconds after the start postcheck declared glm-1 silent while it
+was working, and posted its conclusion two minutes later.
 
 | Exit | Meaning |
 |---|---|
-| 0 | Agents healthy, or nothing to check (no register, or an empty one) |
+| 0 | Agents healthy, prompt delivered, or nothing to check (no register, or an empty one) |
 | 1 | Team-id not found |
-| 2 | An agent is in a fatal error state, or zero messages after the wait; team is killed |
+| 2 | An agent is in a fatal error state (team is killed), or a delivery really failed |
 
 ---
 
