@@ -304,7 +304,33 @@ stopped first (TERM, escalating to KILL after 2s if it ignores that): a director
 out from under a live process used to leave it running for days.
 
 This does not disband a running team. To end one, press `d` in the monitor or
-`POST /api/ensemble/teams/<id>/disband`.
+`POST /api/ensemble/teams/<id>/disband`. It also does not touch tmux: for sessions left behind
+by a team that is over, use `collab-orphans.sh`.
+
+---
+
+## collab-orphans.sh
+
+**Stop tmux sessions left behind by teams that are over.** Dry-run by default.
+
+```bash
+./scripts/collab-orphans.sh                        # list what would be stopped
+./scripts/collab-orphans.sh --force                # actually stop them
+./scripts/collab-orphans.sh --min-age-minutes 10   # be less patient
+```
+
+A session is orphaned when its name carries a team prefix (`collab-<timestamp>-<random>-`) or
+is a monitor (`ensemble-<team-id>`), and the register holds no forming or active team for it.
+Sessions younger than the age threshold (60 minutes by default) are spared, because a team that
+is being created right now is not in the register yet. Anything whose name does not start with
+`collab-` or `ensemble-` is never touched. If the register cannot be read, nothing is removed
+and the exit code is 2: without it a live team cannot be told from a dead one.
+
+Measured 03-11-2026, which is why this exists: `collab-1793370919814-7089-mimo-5` had been
+running since 30 October and `collab-1793655026254-9985-agy-3` since 2 November. Both stood in
+the register as `failed`, and disband only ever killed agents with status `active`, so nothing
+would have stopped them. Disband now sweeps by team prefix as well, so this script is the safety
+net for sessions from before that fix and for a service that died mid-team.
 
 ---
 

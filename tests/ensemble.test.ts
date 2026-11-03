@@ -732,7 +732,7 @@ describe('worktree isolation lifecycle', () => {
       hostId,
     }))
     const spawnRemoteAgent = vi.fn(async () => ({ id: 'remote-agent-id' }))
-    const killLocalAgent = vi.fn(async () => {})
+    const killLocalAgent = vi.fn(async (_sessionName: string) => {})
     const killRemoteAgent = vi.fn(async () => {})
     const createWorktree = vi.fn(async (teamId: string, agentName: string, basePath: string) => ({
       path: path.join(basePath, '.worktrees', `${teamId}-${agentName}`),
@@ -780,6 +780,7 @@ describe('worktree isolation lifecycle', () => {
       sendKeys: vi.fn<AgentRuntime['sendKeys']>(async () => {}),
       pasteFromFile: vi.fn(async (_session: string, _file: string) => {}),
       sessionExists: vi.fn(async () => true),
+      listSessions: vi.fn<() => Promise<Array<{ name: string }>>>(async () => []),
     }
     vi.doMock('../lib/agent-runtime', () => ({ getRuntime: vi.fn(() => runtime) }))
     vi.doMock('../lib/agent-config', () => ({
@@ -1052,6 +1053,32 @@ describe('worktree isolation lifecycle', () => {
     }, '/repo')
     expect(mocks.killLocalAgent.mock.invocationCallOrder[0]).toBeLessThan(mocks.mergeWorktree.mock.invocationCallOrder[0])
     expect(mocks.mergeWorktree.mock.invocationCallOrder[0]).toBeLessThan(mocks.destroyWorktree.mock.invocationCallOrder[0])
+  })
+
+  it('ruimt bij disband elke sessie van dit team op, ook die niet actief heet', async () => {
+    // 03-11-2026: de opruiming las het sessieregister zoals het er op dat
+    // moment stond. De service spawnde er daarna nog twee bij, en die draaiden
+    // uren later nog. Een agent die als failed in het register staat werd ook
+    // nooit gekilld, want disband keek alleen naar status 'active'.
+    const team = makeTeam({ id: 'team-prefix-sweep', name: 'team-prefix-sweep' })
+    team.agents[0].status = 'failed'
+    const { mod, mocks } = await setupWorktreeService(team)
+    mocks.runtime.listSessions.mockResolvedValue([
+      { name: 'team-prefix-sweep-codex-1' },
+      { name: 'team-prefix-sweep-claude-2' },
+      { name: 'team-prefix-sweep-glm-4' },
+      { name: 'een-ander-team-codex-1' },
+      { name: 'ensemble-team-prefix-sweep' },
+    ])
+
+    await mod.disbandTeam(team.id)
+
+    const gedood = mocks.killLocalAgent.mock.calls.map(call => call[0])
+    expect(gedood).toContain('team-prefix-sweep-codex-1')
+    expect(gedood).toContain('team-prefix-sweep-claude-2')
+    expect(gedood).toContain('team-prefix-sweep-glm-4')
+    expect(gedood).not.toContain('een-ander-team-codex-1')
+    expect(gedood).not.toContain('ensemble-team-prefix-sweep')
   })
 
   it('skips worktree merge for remote agents even if worktree metadata exists', async () => {

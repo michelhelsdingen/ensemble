@@ -1509,6 +1509,25 @@ export async function disbandTeam(teamId: string, failureReason?: string, finish
     }
   }
 
+  // Sweep by session-name prefix, not by the register.
+  //
+  // 03-11-2026: a cleanup read the session register as it stood at that
+  // moment, the service spawned two more agents four minutes later, and those
+  // were still running hours afterwards. The loop above also only kills agents
+  // with status 'active', so an agent marked failed (a pane stuck on a dialog,
+  // for one) kept its session for good. team.name carries a millisecond
+  // timestamp plus four random digits, so the prefix belongs to this team
+  // alone. The monitor's own session ('ensemble-<id>') does not match it.
+  try {
+    const runtime = getRuntime()
+    const sessions = runtime.listSessions ? await runtime.listSessions() : []
+    const prefix = `${team.name}-`
+    for (const session of sessions) {
+      if (!session.name.startsWith(prefix)) continue
+      try { await killLocalAgent(session.name) } catch { /* already gone */ }
+    }
+  } catch { /* tmux unavailable: nothing to sweep */ }
+
   const agentsWithWorktrees = team.agents.filter(
     a => a.status !== 'replaced' && a.worktreePath && a.worktreeBranch && (!a.hostId || isSelf(a.hostId))
   )
