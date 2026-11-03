@@ -1146,6 +1146,35 @@ export async function createEnsembleTeam(
       const deliveryResults = await Promise.all(
         injectTargets.map(async ({ agent, sessionName }) => {
           const promptFile = collabPromptFile(team.id, agent.name)
+          const local = !agent.hostId || isSelf(agent.hostId)
+          const marker = resolveAgentProgram(agent.program).readyMarker
+          /**
+           * Check the pane right before writing to it, and confirm afterwards
+           * that it did something with the input.
+           *
+           * Until 03-11-2026 the retry pasted the same prompt three times
+           * without looking, and then waited a full minute for an answer. The
+           * pane was modal on a dialog from the first attempt, so all three
+           * vanished and the failure surfaced sixty seconds too late.
+           */
+          const deliverChecked = async () => {
+            if (!local) return deliver()
+            const before = await runtime.capturePane(sessionName, 50)
+            const screen = readyScreenState(before, marker)
+            if (screen.state !== 'ready') {
+              const reden = screen.state === 'blocked' ? `dialog "${screen.dialog}"` : `pane not ready (${screen.state})`
+              throw new Error(`${agent.name} did not take the prompt: ${reden}`)
+            }
+            await deliver()
+            // A pane that took the paste changes: text appears, a spinner
+            // starts, the input line empties. A modal dialog stands still.
+            for (const wait of [300, 700, 1500, 2500]) {
+              await new Promise(resolve => setTimeout(resolve, wait))
+              if (getMessages(team.id).some(message => message.from === agent.name)) return
+              if (await runtime.capturePane(sessionName, 50) !== before) return
+            }
+            throw new Error(`${agent.name} did not take the prompt: the pane did not change`)
+          }
           const deliver = async () => {
             if (agent.hostId && !isSelf(agent.hostId)) {
               const host = getHostById(agent.hostId)
@@ -1175,9 +1204,9 @@ export async function createEnsembleTeam(
             }
           }
           try {
-            await deliver()
+            await deliverChecked()
             console.log(`[Ensemble] Prompt submitted to ${sessionName}; awaiting agent message`)
-            return { agent, sessionName, deliver }
+            return { agent, sessionName, deliver: deliverChecked }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             if (err instanceof Error && err.name === 'AgentNotRunningError') {

@@ -47,6 +47,10 @@ function run(overrides: Record<string, string> = {}, explicit = '') {
     ...process.env, PATH: bin, HOME: root, TMPDIR: root, TEST_ROOT: root,
     ENSEMBLE_URL: 'http://unused.invalid', ENSEMBLE_CONFIG: path.join(root, 'config.json'),
     ENSEMBLE_HEALTH_CMD: 'test-hook', COLLAB_AGENTS: '', COLLAB_OVERRIDE_FILE: path.join(root, 'override'),
+    // Dit bestand gaat over de health-hook en de auth-probes. De startdialoog-
+    // probe start zijn eigen node-proces en heeft hier geen rol; aan laten
+    // staan zou de node-stub van de health-hook laten afgaan.
+    COLLAB_SKIP_STARTPROBE: '1',
     HEALTH_SELECTION: 'codex,claude', CODEX_PROBE: '7392', CLAUDE_PROBE: '{"loggedIn": true}', ...overrides,
   } })
   return { ...result, output: result.stdout + result.stderr }

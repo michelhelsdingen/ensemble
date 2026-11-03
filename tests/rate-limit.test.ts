@@ -4,6 +4,10 @@ import path from 'path'
 import net from 'net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+// De teamstart in beforeAll wacht sinds 03-11-2026 op stabiele gereedheid en
+// bevestigt de aflevering, dus de standaard hook-timeout van 10s is te kort.
+vi.setConfig({ hookTimeout: 40_000 })
+
 // server.ts had `path.startsWith('/api/ensemble/')` as its rate-limit
 // exemption, which matches every route this server has: the limit of 100
 // per minuut was volledig dode code. De vervangende uitzondering moet alleen

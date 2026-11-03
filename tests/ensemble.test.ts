@@ -910,10 +910,15 @@ describe('worktree isolation lifecycle', () => {
     try {
       const team = makeTeam({ agents: [makeTeam().agents[0]] })
       const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      // De pane neemt de prompt wel aan (het scherm verandert), de agent zwijgt
+      // alleen. Dat is het geval waarvoor de drie pogingen bedoeld zijn; een
+      // pane die niets doet wordt sinds 03-11-2026 na één poging gemeld.
+      let beeld = 0
+      mocks.runtime.capturePane.mockImplementation(async () => `> regel ${beeld++}`)
       const creation = mod.createEnsembleTeam({
         name: team.name, description: team.description, agents: [{ program: 'codex' }],
       })
-      await vi.advanceTimersByTimeAsync(65_000)
+      await vi.advanceTimersByTimeAsync(90_000)
       await creation
       expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(3)
       expect(appendedMessages.some(message => message.content.includes('codex-1 did not respond after 3 prompt attempts'))).toBe(true)
@@ -948,6 +953,8 @@ describe('worktree isolation lifecycle', () => {
     expect(prompt).not.toMatch(/teammate|undefined|confirmed agreement|wait for|delegat/i)
   })
 
+  // 20s: een echte teamstart wacht op stabiele gereedheid en bevestigt de
+  // aflevering voordat hij klaar is.
   it('spawns local agents inside their worktree when useWorktrees=true', async () => {
     const team = makeTeam({
       id: 'team-worktree-create',
@@ -977,8 +984,10 @@ describe('worktree isolation lifecycle', () => {
     expect(mocks.spawnLocalAgent).toHaveBeenCalledWith(expect.objectContaining({
       workingDirectory: '/repo/.worktrees/team-worktree-create-codex-1',
     }))
-  })
+  }, 20_000)
 
+  // 20s: een echte teamstart wacht op stabiele gereedheid en bevestigt de
+  // aflevering voordat hij klaar is.
   it('does not create worktrees when useWorktrees=false', async () => {
     const team = makeTeam({
       id: 'team-worktree-disabled',
@@ -1008,7 +1017,7 @@ describe('worktree isolation lifecycle', () => {
     expect(mocks.spawnLocalAgent).toHaveBeenCalledWith(expect.objectContaining({
       workingDirectory: '/repo',
     }))
-  })
+  }, 20_000)
 
   it('kills the local session before merging and destroying its worktree', async () => {
     const team = makeTeam({
@@ -1101,6 +1110,30 @@ describe('worktree isolation lifecycle', () => {
       expect((await creation).status).toBe(201)
       expect(mocks.runtime.pasteFromFile).not.toHaveBeenCalled()
       expect(appendedMessages.some(m => m.content.includes('Hooks need review'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('plakt niet nog twee keer in een pane die de eerste keer niets deed', async () => {
+    // Tot 03-11-2026 plakte de service drie keer blind dezelfde prompt en
+    // wachtte er 60s op een antwoord. Codex stond toen al in een dialoog, dus
+    // alle drie verdwenen in het niets en de melding kwam een minuut te laat.
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      const config = await import('../lib/agent-config')
+      vi.mocked(config.resolveAgentProgram).mockReturnValue({ readyMarker: '>', inputMethod: 'pasteFromFile' } as ReturnType<typeof config.resolveAgentProgram>)
+      // Een stilstaand, gereed scherm: de paste verandert er niets aan.
+      mocks.runtime.capturePane.mockResolvedValue('  Codex v0.164.0\n> ')
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(120_000)
+      await creation
+      expect(mocks.runtime.pasteFromFile).toHaveBeenCalledOnce()
+      expect(appendedMessages.some(m => /did not take the prompt|nam de prompt niet/i.test(m.content))).toBe(true)
     } finally {
       vi.useRealTimers()
     }

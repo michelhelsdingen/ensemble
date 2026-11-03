@@ -2,6 +2,10 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Een teamstart wacht sinds 03-11-2026 op stabiele gereedheid en bevestigt de
+// aflevering, dus deze twee echte starts hebben meer dan 5s nodig.
+vi.setConfig({ testTimeout: 30_000 })
 import type { EnsembleTeam } from '../types/ensemble'
 
 // De service spawnt de tmux-sessies EN levert de prompts af binnen één
