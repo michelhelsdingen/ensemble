@@ -146,6 +146,14 @@ asks the service whether its own `execPath` still exists and whether it can real
 repo, and restarts it through launchd when it cannot. It refuses to restart while a team is
 active, because team state lives in the service's memory: disband that team first.
 
+It also compares the service's own age against the modification times of `server.ts`,
+`services/`, `lib/` and `types/`. A service older than its code is running a version that no
+longer exists on disk, and the health endpoint says nothing about that. Measured 03-11-2026:
+every fix was in git and green in the tests while the service had been up for eleven hours and
+knew none of them, so the first smoke test failed on the old readiness logic and a silent
+replacement. Preflight restarts it through launchd when no team is active, and warns with the
+command to run when one is.
+
 | Exit | Meaning |
 |---|---|
 | 0 | Safe to launch |

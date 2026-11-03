@@ -352,6 +352,67 @@ except (ValueError, TypeError, KeyError, AttributeError):
   fi
 fi
 
+# ─── 2c. Draait de service de code die er nu staat? ───
+# 03-11-2026: elke fix in de servicecode stond in git en in de tests, maar de
+# service draaide al elf uur en kende er niets van. De eerste rookproef
+# mislukte precies daarop: oude gereedheidslogica, een stille vervanger, en
+# geen van de nieuwe velden. Het health-endpoint zegt niets over de versie, dus
+# de enige betrouwbare maat is de leeftijd van het proces tegen de
+# wijzigingsdatum van de bestanden die het in het geheugen heeft.
+SERVICE_UPTIME=$(printf '%s' "$HEALTH" | python3 -c "import json,sys; print(int(json.load(sys.stdin).get('uptimeSeconds', 0)))" 2>/dev/null || echo 0)
+if [ "$SERVICE_UPTIME" -gt 0 ]; then
+  CODE_MTIME=$(python3 -c "
+import os, sys
+wortel = sys.argv[1]
+nieuwste = 0
+for pad in ('server.ts',):
+    vol = os.path.join(wortel, pad)
+    if os.path.exists(vol):
+        nieuwste = max(nieuwste, os.path.getmtime(vol))
+for map_ in ('services', 'lib', 'types'):
+    for hier, _, namen in os.walk(os.path.join(wortel, map_)):
+        for naam in namen:
+            if naam.endswith('.ts'):
+                nieuwste = max(nieuwste, os.path.getmtime(os.path.join(hier, naam)))
+print(int(nieuwste))
+" "$SCRIPT_DIR/.." 2>/dev/null || echo 0)
+  NU_EPOCH=$(date +%s)
+  SERVICE_START=$((NU_EPOCH - SERVICE_UPTIME))
+  if [ "$CODE_MTIME" -gt 0 ] && [ "$CODE_MTIME" -gt "$SERVICE_START" ]; then
+    STALE_TEAMS=$(curl -sf "$API/api/ensemble/teams" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    teams = json.load(sys.stdin)["teams"]
+    print("active" if any(team.get("status") == "active" for team in teams) else "none")
+except Exception:
+    print("unknown")
+' 2>/dev/null || echo unknown)
+    LAUNCHD_LABEL="${ENSEMBLE_LAUNCHD_LABEL:-dev.ensemble.server}"
+    LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
+    if [ "$STALE_TEAMS" = none ] && command -v launchctl > /dev/null 2>&1 \
+       && launchctl print "$LAUNCHD_TARGET" > /dev/null 2>&1; then
+      warn "Service is ouder dan de servicecode en draait dus verouderde code; herstarten via launchd ($LAUNCHD_LABEL)"
+      if launchctl kickstart -k "$LAUNCHD_TARGET"; then
+        for _ in $(seq 1 20); do
+          sleep 1
+          curl -sf "$API/api/v1/health" > /dev/null 2>&1 && break
+        done
+        if curl -sf "$API/api/v1/health" > /dev/null 2>&1; then
+          ok "Service herstart; draait nu de code die op schijf staat"
+        else
+          fail 1 "Service kwam na de herstart niet terug op $API"
+        fi
+      else
+        warn "Herstart mislukte; de service draait nog verouderde code"
+      fi
+    else
+      # Niet herstarten met een actief team: teamstate leeft in het geheugen.
+      warn "Service is ouder dan de servicecode en draait dus verouderde code.
+     Herstart hem zodra het lopende werk klaar is: launchctl kickstart -k $LAUNCHD_TARGET"
+    fi
+  fi
+fi
+
 # ─── 3. DNS reachability ───
 # Resolve through python3, which every collab script already depends on, instead of `host`.
 # `host` ships in bind9-host and is absent from a minimal Linux install; because the old check

@@ -77,6 +77,48 @@ describe('preflight runtime health', () => {
     expect(result.code).not.toBe(8)
   })
 
+  // 03-11-2026: elke fix in de servicecode stond in git en in de tests, maar de
+  // service draaide al elf uur en kende er niets van. De eerste rookproef
+  // mislukte daarop: oude gereedheidslogica, een stille vervanger, en geen van
+  // de nieuwe velden. Preflight hoort dat te zien.
+  it('herstart een service die ouder is dan de servicecode', async () => {
+    const result = await runPreflight(
+      () => ({
+        status: 'healthy', credentialStore: 'readable',
+        uptimeSeconds: fs.existsSync(path.join(root, 'restarted')) ? 2 : 90_000,
+        executable: 'present', repoRead: 'readable', spawnReady: true,
+      }),
+      { teams: [{ id: 'old-team', status: 'disbanded' }] },
+    )
+    expect(fs.existsSync(path.join(root, 'restarted'))).toBe(true)
+    expect(result.output).toMatch(/ouder dan de servicecode|verouderde code/i)
+    expect(result.code).not.toBe(8)
+  })
+
+  it('laat een oude service met een actief team met rust en waarschuwt alleen', async () => {
+    const result = await runPreflight(
+      () => ({
+        status: 'healthy', credentialStore: 'readable', uptimeSeconds: 90_000,
+        executable: 'present', repoRead: 'readable', spawnReady: true,
+      }),
+      { teams: [{ id: 'team-1', status: 'active' }] },
+    )
+    expect(fs.existsSync(path.join(root, 'restarted'))).toBe(false)
+    expect(result.output).toMatch(/ouder dan de servicecode|verouderde code/i)
+  })
+
+  it('zegt niets over de leeftijd als de service jonger is dan de code', async () => {
+    const result = await runPreflight(
+      () => ({
+        status: 'healthy', credentialStore: 'readable', uptimeSeconds: 30,
+        executable: 'present', repoRead: 'readable', spawnReady: true,
+      }),
+      { teams: [{ id: 'old-team', status: 'disbanded' }] },
+    )
+    expect(result.output).not.toMatch(/ouder dan de servicecode/i)
+    expect(fs.existsSync(path.join(root, 'restarted'))).toBe(false)
+  })
+
   it('warns and continues when an old service has no runtime fields', async () => {
     const result = await runPreflight(
       () => ({ status: 'healthy', credentialStore: 'readable', uptimeSeconds: 1 }),
