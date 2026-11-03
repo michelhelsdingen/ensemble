@@ -34,6 +34,7 @@ const TEAM = '11111111-2222-3333-4444-555555555555'
 // Neppe curl: health, team aanmaken en de teamstatus. TEST_DELIVERY bepaalt wat
 // team_delivery_state straks uit die status leest.
 fs.writeFileSync(path.join(root, 'curl'), `#!/bin/bash
+echo "$@" >> "$TEST_ROOT/curl-aanroepen.log"
 URL=""
 for arg in "$@"; do case "$arg" in http*) URL="$arg";; esac; done
 case "$URL" in
@@ -56,7 +57,16 @@ function team(delivery: Array<[string, string]>, sprekers: string[]) {
   })
 }
 
-function launch(teamJson: string) {
+function launch(teamJson: string, bridgeStuk = false) {
+  fs.rmSync(path.join(root, 'curl-aanroepen.log'), { force: true })
+  // Geen oude pid-bestanden laten staan: de launcher kijkt of ze er zijn en of
+  // dat proces nog leeft, en een pid uit een vorige test maakt de uitslag van
+  // deze test onzin.
+  fs.rmSync(path.join(root, TEAM, 'bridge.pid'), { force: true })
+  fs.rmSync(path.join(root, TEAM, 'poller.pid'), { force: true })
+  stub('ensemble-bridge.sh', bridgeStuk
+    ? 'exit 1'
+    : 'echo $$ > "$TEST_ROOT/$1/bridge.pid"; exec sleep 20')
   const deliveryFile = path.join(root, 'delivery.json')
   fs.writeFileSync(deliveryFile, teamJson)
   fs.mkdirSync(path.join(root, TEAM), { recursive: true })
@@ -109,5 +119,22 @@ describe('collab-launch oordeelt over een verse start', () => {
     const run = launch(team([['codex-1', 'confirmed'], ['glm-2', 'pending']], ['codex-1']))
     expect(run.status).toBe(3)
     expect(run.seconds).toBeGreaterThan(7)
+  }, 30_000)
+})
+
+/**
+ * Exit 4 (de bridge of de poller stopt direct) liet het al aangemaakte team
+ * volledig achter: actief in het register, met draaiende tmux-sessies. Gevonden
+ * door het reviewteam van 03-11-2026 (team 40d536c0).
+ */
+describe('collab-launch ruimt op als hij halverwege stopt', () => {
+  it('heft het team op als de bridge meteen stopt', () => {
+    const run = launch(team([['codex-1', 'delivered'], ['glm-2', 'delivered']], []), true)
+    expect(run.status).toBe(4)
+    const aanroepen = fs.existsSync(path.join(root, 'curl-aanroepen.log'))
+      ? fs.readFileSync(path.join(root, 'curl-aanroepen.log'), 'utf8')
+      : ''
+    expect(aanroepen).toMatch(new RegExp(`teams/${TEAM}/disband`))
+    expect(run.out).toMatch(/opgeheven|opgeruimd/i)
   }, 30_000)
 })

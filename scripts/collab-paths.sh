@@ -188,10 +188,20 @@ if not isinstance(agents, list):
     print('unknown'); sys.exit(0)
 telt = [a for a in agents if isinstance(a, dict) and a.get('status') not in ('replaced', 'done')]
 if not telt or not any(a.get('delivery') for a in telt):
+    # Niemand heeft een delivery-veld: of de service is ouder dan dit veld, of
+    # geen enkele agent is gespawnd. Dat tweede is wel te zien: een agent die
+    # draait heeft status 'active'.
+    if telt and all(a.get('status') != 'active' and not a.get('delivery') for a in telt):
+        print('failed ' + ' '.join(a.get('name', '?') for a in telt)); sys.exit(0)
     print('unknown'); sys.exit(0)
 sprekers = {m.get('from') for m in (data.get('messages') or []) if isinstance(m, dict)}
+# Een agent zonder delivery-veld die niet draait, is nooit gespawnd. Die hield de
+# staat eeuwig op 'pending', waardoor de launcher 120 seconden wachtte op
+# informatie die de service al had (reviewteam 03-11-2026).
 mislukt = [a.get('name', '?') for a in telt
-           if a.get('delivery') == 'failed' and a.get('name') not in sprekers]
+           if (a.get('delivery') == 'failed'
+               or (not a.get('delivery') and a.get('status') != 'active'))
+           and a.get('name') not in sprekers]
 if mislukt:
     print('failed ' + ' '.join(mislukt)); sys.exit(0)
 if all(a.get('delivery') == 'confirmed' or a.get('name') in sprekers for a in telt):

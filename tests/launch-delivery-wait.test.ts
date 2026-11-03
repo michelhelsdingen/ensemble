@@ -93,6 +93,25 @@ describe('team_delivery_state', () => {
     })).toBe('failed glm-2')
   })
 
+  /**
+   * Gevonden door het reviewteam van 03-11-2026 (team 40d536c0): een agent
+   * waarvan de spawn mislukte krijgt status 'idle' en nooit een delivery-veld,
+   * bleef meetellen en hield de staat eeuwig op 'pending'. De launcher lustte
+   * daar 120 seconden op door voor informatie die de service meteen had.
+   */
+  it('noemt een agent die nooit gespawnd is meteen mislukt', () => {
+    expect(state({
+      team: { agents: [agent('codex-1', 'confirmed'), agent('claude-2', undefined, 'idle')] },
+      messages: [bericht('codex-1')],
+    })).toBe('failed claude-2')
+  })
+
+  it('wacht niet op een agent die nooit startte en ook niets zei', () => {
+    expect(state({
+      team: { agents: [agent('codex-1', undefined, 'idle'), agent('claude-2', undefined, 'idle')] },
+    })).toBe('failed codex-1 claude-2')
+  })
+
   it('is pending bij een service die dit veld niet kent', () => {
     expect(state({ team: { agents: [agent('codex-1'), agent('claude-2')] } })).toBe('unknown')
   })
