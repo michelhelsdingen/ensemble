@@ -477,11 +477,28 @@ except OSError:
 for session in sessions:
     matches = [name for name in agent_names if session.endswith('-' + name)]
     if not matches:
-        print(session)
         continue
     agent_name = max(matches, key=len)
     if agent_name not in active:
         print(agent_name)
+PY
+}
+sessions_without_prompt() {
+  python3 - "$RUNTIME_DIR/sessions" "$RUNTIME_DIR/prompts" <<'PY'
+import glob
+import os
+import sys
+
+sessions_path, prompts_dir = sys.argv[1:]
+agent_names = [os.path.basename(name)[:-4] for name in glob.glob(os.path.join(prompts_dir, '*.txt'))]
+try:
+    with open(sessions_path, encoding='utf-8') as source:
+        sessions = [line.strip() for line in source if line.strip()]
+except OSError:
+    sessions = []
+for session in sessions:
+    if not any(session.endswith('-' + name) for name in agent_names):
+        print(session)
 PY
 }
 DELIVERY_STATE="unknown"
@@ -528,6 +545,11 @@ else
     echo -e "\r  ${SPIN} Waiting for agent messages...       "
   fi
 fi
+
+SESSIONS_WITHOUT_PROMPT=$(sessions_without_prompt)
+while IFS= read -r session; do
+  [ -z "$session" ] || echo -e "  ${D}sessie zonder promptbestand: $session${R}"
+done <<< "$SESSIONS_WITHOUT_PROMPT"
 
 # ─── 6b. Postcheck (run in background after 30s — kills team if agents broken) ───
 # Skip with COLLAB_SKIP_POSTCHECK=1

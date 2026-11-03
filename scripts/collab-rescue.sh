@@ -128,10 +128,23 @@ deliver_to_session() {
   local VOOR
   VOOR="$(tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20 || true)"
 
-  local BUFNAME="rescue-${AGENT_NAME}-$$"
-  tmux load-buffer -b "$BUFNAME" "$PROMPT_FILE"
-  tmux paste-buffer -b "$BUFNAME" -t "$SESSION"
-  tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
+  local INPUT_METHOD BUFNAME PROMPT_TEXT
+  if ! INPUT_METHOD=$("$REPO_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/agent-config-query.ts" input-method "$AGENT_NAME"); then
+    echo "  $AGENT_NAME: afleverwijze ontbreekt in agents.json" >&2
+    return 1
+  fi
+  if [ "$INPUT_METHOD" = "sendKeys" ]; then
+    PROMPT_TEXT="$(< "$PROMPT_FILE")"
+    case "$PROMPT_TEXT" in
+      -*) tmux send-keys -t "$SESSION" -l -- "$PROMPT_TEXT" ;;
+      *) tmux send-keys -t "$SESSION" -l "$PROMPT_TEXT" ;;
+    esac
+  else
+    BUFNAME="rescue-${AGENT_NAME}-$$"
+    tmux load-buffer -b "$BUFNAME" "$PROMPT_FILE"
+    tmux paste-buffer -b "$BUFNAME" -t "$SESSION"
+    tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
+  fi
 
   # Wachten tot de pane de paste toont, in plaats van een vaste 5 (codex) of 1
   # seconde. Daarna de Enter; die komt in de pty-stroom achter de tekst aan.

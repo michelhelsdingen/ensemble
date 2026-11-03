@@ -26,6 +26,8 @@ const SESSIES = [
   ['collab-1793713220568-7983-agy-3', NU - 1],
   ['collab-1793713220568-7983-glm-4', NU - 1],
   ['ensemble-e2eef7f7-2af6-47a9-8292-c805499cc42a', NU - 1],
+  ['collab-handwerk', NU - 500 * UUR],
+  ['ensemble-handwerk', NU - 500 * UUR],
   ['mijn-eigen-werk', NU - 500 * UUR],
 ] as const
 
@@ -93,6 +95,14 @@ describe('collab-orphans.sh', () => {
     const { output, killed } = run(['--force'])
     expect(output).not.toContain('mijn-eigen-werk')
     expect(killed).not.toContain('mijn-eigen-werk')
+  })
+
+  it('spaart handmatig benoemde collab-sessies die niet het eigen patroon volgen', () => {
+    const { output, killed } = run(['--force'])
+    expect(output).not.toContain('collab-handwerk')
+    expect(output).not.toContain('ensemble-handwerk')
+    expect(killed).not.toContain('collab-handwerk')
+    expect(killed).not.toContain('ensemble-handwerk')
   })
 
   it('doodt met --force alleen de wezen', () => {

@@ -154,7 +154,7 @@ exit 0
   }, 30_000)
 
   it('plakt niet opnieuw als de pane de prompt heeft aangenomen', () => {
-    makeTeam('team-aangenomen', ['team-aangenomen-glm-1'], { 'glm-1': 'prompt' })
+    makeTeam('team-aangenomen', ['team-aangenomen-grok-1'], { 'grok-1': 'prompt' })
     const bin = path.join(root, 'bin')
     const log = path.join(root, 'tmux.log')
     nepTmux(bin, log)

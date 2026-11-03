@@ -57,7 +57,7 @@ function team(delivery: Array<[string, string]>, sprekers: string[]) {
   })
 }
 
-function launch(teamJson: string, bridgeStuk = false) {
+function launch(teamJson: string, bridgeStuk = false, orphanSession = '') {
   fs.rmSync(path.join(root, 'curl-aanroepen.log'), { force: true })
   // Geen oude pid-bestanden laten staan: de launcher kijkt of ze er zijn en of
   // dat proces nog leeft, en een pid uit een vorige test maakt de uitslag van
@@ -71,7 +71,10 @@ function launch(teamJson: string, bridgeStuk = false) {
   fs.writeFileSync(deliveryFile, teamJson)
   fs.mkdirSync(path.join(root, TEAM), { recursive: true })
   // Het sessieregister is normaal door de service geschreven.
-  fs.writeFileSync(path.join(root, TEAM, 'sessions'), 'collab-test-codex-1\ncollab-test-glm-2\n')
+  fs.mkdirSync(path.join(root, TEAM, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(root, TEAM, 'prompts', 'codex-1.txt'), 'prompt')
+  fs.writeFileSync(path.join(root, TEAM, 'prompts', 'glm-2.txt'), 'prompt')
+  fs.writeFileSync(path.join(root, TEAM, 'sessions'), `collab-test-codex-1\ncollab-test-glm-2\n${orphanSession}\n`)
   const begin = Date.now()
   const result = spawnSync('/bin/bash', [path.join(scripts, 'collab-launch.sh'), root, 'Een kleine taak', 'codex,glm'], {
     encoding: 'utf8',
@@ -94,10 +97,12 @@ function launch(teamJson: string, bridgeStuk = false) {
 
 describe('collab-launch oordeelt over een verse start', () => {
   it('noemt een team live zodra de prompt bij iedereen aankwam', () => {
-    const run = launch(team([['codex-1', 'confirmed'], ['glm-2', 'silent']], ['codex-1']))
+    const run = launch(team([['codex-1', 'confirmed'], ['glm-2', 'silent']], ['codex-1']), false, 'collab-test-orphan')
     expect(run.out).toContain('Prompt aangekomen bij alle agents')
     expect(run.out).toContain('nog geen bericht van: glm-2')
     expect(run.out).toContain('Team is live!')
+    expect(run.out).toContain('sessie zonder promptbestand: collab-test-orphan')
+    expect(run.out).not.toContain('collab-rescue.sh ' + TEAM + ' collab-test-orphan')
     expect(run.out).not.toContain('collab-rescue.sh')
     expect(run.status).toBe(0)
   }, 30_000)

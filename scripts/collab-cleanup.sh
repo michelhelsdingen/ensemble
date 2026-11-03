@@ -22,6 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/collab-paths.sh"
 
 ENSEMBLE_ROOT="$(collab_runtime_root)"
+API="${ENSEMBLE_URL:-http://localhost:23000}"
 KEEP_RECENT=3
 MIN_AGE_SECONDS=$((24 * 60 * 60))
 MODE="dry-run"
@@ -92,6 +93,31 @@ abandoned_entries() {
       [ -f "$runtime_dir/.finished" ] && continue
       printf '%s\t%s\n' "$(newest_mtime "$runtime_dir")" "$runtime_dir"
     done | sort -rn
+}
+
+# Geef alleen status terug als de service een bruikbaar teamantwoord gaf.
+team_status() {
+  local team_id="$1" response http_status body
+  response="$(curl -sS -w $'\n%{http_code}' "$API/api/ensemble/teams/$team_id" 2>/dev/null)" || return 1
+  http_status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [ "$http_status" = "404" ]; then
+    printf 'not-found\n'
+    return 0
+  fi
+  [ "$http_status" = "200" ] || return 1
+  printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    team = data.get("team", data) if isinstance(data, dict) else None
+    status = team.get("status") if isinstance(team, dict) else None
+    if not isinstance(status, str) or not status:
+        raise ValueError("missing team status")
+    print(status)
+except Exception:
+    sys.exit(1)
+' 2>/dev/null
 }
 
 for arg in "$@"; do
@@ -205,6 +231,14 @@ for entry in ${ABANDONED[@]+"${ABANDONED[@]}"}; do
 
   ABANDONED_ELIGIBLE=$((ABANDONED_ELIGIBLE + 1))
   if [ "$MODE" = "force" ]; then
+    if ! status="$(team_status "$runtime_name")"; then
+      echo -e "  ${Y}skip${R}    ${runtime_name} ${D}(teamstatus niet beschikbaar, map behouden)${R}"
+      continue
+    fi
+    if [ "$status" = "forming" ] || [ "$status" = "active" ]; then
+      echo -e "  ${C}skip${R}    ${runtime_name} ${D}(team heeft status ${status}, map behouden)${R}"
+      continue
+    fi
     stop_team_processes "$runtime_dir"
     if rm -rf "$runtime_dir"; then
       ABANDONED_REMOVED=$((ABANDONED_REMOVED + 1))

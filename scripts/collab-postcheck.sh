@@ -131,13 +131,30 @@ with open(sessions_path, encoding='utf-8') as source:
 for session in sessions:
     matches = [name for name in agent_names if session.endswith('-' + name)]
     if not matches:
-        print(session)
         continue
     agent_name = max(matches, key=len)
     if agent_name not in active:
         print(agent_name)
 PY
 )
+
+SESSIONS_WITHOUT_PROMPT=$(python3 - "$RD/sessions" "$RD/prompts" <<'PY'
+import glob
+import os
+import sys
+
+sessions_path, prompts_dir = sys.argv[1:]
+agent_names = [os.path.basename(name)[:-4] for name in glob.glob(os.path.join(prompts_dir, '*.txt'))]
+with open(sessions_path, encoding='utf-8') as source:
+    sessions = [line.strip() for line in source if line.strip()]
+for session in sessions:
+    if not any(session.endswith('-' + name) for name in agent_names):
+        print(session)
+PY
+)
+while IFS= read -r session; do
+  [ -z "$session" ] || echo "  sessie zonder promptbestand: $session"
+done <<< "$SESSIONS_WITHOUT_PROMPT"
 
 if [ "$ERRORS_FOUND" -gt 0 ]; then
   echo -e "${RED}✗ Postcheck FAILED — $ERRORS_FOUND agent(s) in error state${R}" >&2

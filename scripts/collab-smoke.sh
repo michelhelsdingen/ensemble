@@ -19,6 +19,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=./collab-paths.sh
 source "$SCRIPT_DIR/collab-paths.sh"
 
@@ -57,6 +58,47 @@ MISLUKT=0
 LIVE_TIJDEN=""
 SPREEK_TIJDEN=""
 nu_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+team_cleanup_residuals() {
+  local team_name="$1" team_id="$2" runtime_dir="$3" repo_dir="$4"
+  local residuals="" sessions="" name pid worktrees="" short_id
+
+  sessions=$(tmux ls 2>/dev/null | cut -d: -f1 \
+    | grep -E "^(${team_name}-|ensemble-${team_id}\$)" || true)
+  if [ -n "$sessions" ]; then
+    residuals="tmux-sessies: $(printf '%s' "$sessions" | tr '\n' ' ')"
+  fi
+
+  for name in bridge poller; do
+    [ -f "$runtime_dir/$name.pid" ] || continue
+    pid=$(cat "$runtime_dir/$name.pid" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    if kill -0 "$pid" 2>/dev/null; then
+      [ -z "$residuals" ] || residuals+=$'\n'
+      residuals+="$name-proces draait (pid $pid)"
+    fi
+  done
+
+  short_id="${team_id:0:8}"
+  while IFS= read -r name; do
+    case "$name" in
+      "branch refs/heads/collab/$team_id/"*|"branch refs/heads/ensemble/$short_id")
+        [ -z "$worktrees" ] || worktrees+=$'\n'
+        worktrees+="${name#branch refs/heads/}"
+        ;;
+    esac
+  done < <(git -C "$repo_dir" worktree list --porcelain 2>/dev/null | awk '$1 == "branch"')
+  if [ -n "$worktrees" ]; then
+    [ -z "$residuals" ] || residuals+=$'\n'
+    residuals+="git-worktrees: $(printf '%s' "$worktrees" | tr '\n' ' ')"
+  fi
+
+  if [ -n "$residuals" ]; then
+    printf '%s\n' "$residuals"
+    return 1
+  fi
+  return 0
+}
 
 for RUN in $(seq 1 "$RUNS"); do
   printf "\n  ${BD}rookproef %s/%s${R} ${D}(%s, monitor %s, sjabloon %s)${R}\n" \
@@ -140,15 +182,15 @@ print(' '.join(sorted(namen - sprekers)) or 'ALLEMAAL')
   # Niets mag overblijven. Dit is de controle die vier dagen lang niemand deed.
   RESTANTEN=""
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    RESTANTEN=$(tmux ls 2>/dev/null | cut -d: -f1 \
-      | grep -E "^(${TEAM_NAAM:-__geen__}-|ensemble-${TEAM_ID}\$)" || true)
+    RESTANTEN=$(team_cleanup_residuals "${TEAM_NAAM:-__geen__}" "$TEAM_ID" \
+      "$(collab_runtime_dir "$TEAM_ID")" "$REPO_DIR" || true)
     [ -z "$RESTANTEN" ] && break
     sleep 1
   done
   if [ -z "$RESTANTEN" ]; then
-    pass "geen tmux-sessie van dit team over, monitor inbegrepen"
+    pass "geen tmux-sessie, bridge of poller van dit team over, en geen git-worktree"
   else
-    fout "sessies blijven draaien: $(printf '%s' "$RESTANTEN" | tr '\n' ' ')"
+    fout "resten na disband: $(printf '%s' "$RESTANTEN" | tr '\n' ' ')"
     RUN_OK=0
   fi
 

@@ -87,6 +87,8 @@ startprobe_report() {
   local blocked
   blocked="$(startprobe_blocked)"
   STARTPROBE_PID=""
+  rm -f "$STARTPROBE_FILE"
+  STARTPROBE_FILE=""
   [ -n "$blocked" ] || return 0
   echo -e "  ${RED}✗${R} En een agent wacht op een dialoog die alleen jij mag beantwoorden:" >&2
   printf '%s\n' "$blocked" | sed 's/^/     /' >&2

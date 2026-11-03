@@ -114,6 +114,13 @@ describe('preflight startprobe argumenten', () => {
 describe('preflight startprobe loopt naast de andere checks', () => {
   const src = fs.readFileSync(preflight, 'utf8')
 
+  it('ruimt het probe-bestand ook op als een andere check faalt', () => {
+    // Broncontrole is hier bewust genoeg: de foutafhandeling zit in een lokale
+    // functie die pas wordt aangeroepen bij externe service- en CLI-controles.
+    const report = src.slice(src.indexOf('startprobe_report() {'), src.indexOf('\n}\n\nfail()'))
+    expect(report).toMatch(/rm -f "\$STARTPROBE_FILE"/)
+  })
+
   it('start de probe voordat de servicecheck begint en beoordeelt hem later', () => {
     const gestart = src.indexOf('STARTPROBE_PID=$!')
     const service = src.indexOf('─── 1. Ensemble service ───')

@@ -20,10 +20,12 @@ const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 3600 * 1000)
 
 function run(root: string, ...args: string[]): string {
   return execFileSync(CLEANUP, args, {
-    env: { ...process.env, COLLAB_RUNTIME_ROOT: root },
+    env: { ...process.env, COLLAB_RUNTIME_ROOT: root, PATH: `${mockBin}:${process.env.PATH}`, CURL_CALLS: path.join(root, 'curl-calls') },
     encoding: 'utf8',
   })
 }
+
+let mockBin: string
 
 // stop_team_processes rechtstreeks aanroepen, los van cleanup.sh, zodat de
 // escalatie- en pid-hergebruiktests niet ook nog aan de leeftijds- en
@@ -84,6 +86,14 @@ describe('collab-cleanup.sh abandoned directories', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'ensemble-cleanup-'))
+    mockBin = path.join(root, 'bin')
+    fs.mkdirSync(mockBin)
+    fs.writeFileSync(path.join(mockBin, 'curl'), [
+      '#!/bin/sh',
+      'if [ -n "${CURL_CALLS:-}" ]; then printf \'%s\\n\' "$*" >> "$CURL_CALLS"; fi',
+      'if [ -n "${CURL_REPLY:-}" ]; then printf \'%s\\n\' "$CURL_REPLY"; else printf \'%s\\n\' \'{"team":{"status":"disbanded"}}\'; fi',
+      'printf \'\\n%s\' "${CURL_HTTP_CODE:-200}"',
+    ].join('\n'), { mode: 0o755 })
   })
 
   afterEach(() => {
@@ -106,6 +116,50 @@ describe('collab-cleanup.sh abandoned directories', () => {
     const dir = makeDir(root, 'starting', { 'prompts/codex-1.txt': 'x' }, false)
     run(root, '--force')
     expect(fs.existsSync(dir)).toBe(true)
+  })
+
+  it.each(['forming', 'active'])('behoudt een oud team als de service status %s meldt', status => {
+    const dir = makeDir(root, 'team-active', { 'messages.jsonl': '{}\n' }, true)
+    const calls = path.join(root, 'curl-calls')
+    const output = execFileSync(CLEANUP, ['--force'], {
+      env: {
+        ...process.env,
+        COLLAB_RUNTIME_ROOT: root,
+        PATH: `${mockBin}:${process.env.PATH}`,
+        CURL_CALLS: calls,
+        CURL_REPLY: `{"team":{"id":"team-active","status":"${status}"}}`,
+      },
+      encoding: 'utf8',
+    })
+    expect(fs.existsSync(dir)).toBe(true)
+    expect(output).toContain(`team heeft status ${status}`)
+    expect(fs.readFileSync(calls, 'utf8')).toContain('http://localhost:23000/api/ensemble/teams/team-active')
+  })
+
+  it('behoudt een onaf team als de service niet bereikbaar is', () => {
+    const dir = makeDir(root, 'team-offline', { 'messages.jsonl': '{}\n' }, true)
+    const calls = path.join(root, 'curl-calls')
+    fs.writeFileSync(path.join(mockBin, 'curl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CURL_CALLS"\nexit 7\n', { mode: 0o755 })
+    execFileSync(CLEANUP, ['--force'], {
+      env: { ...process.env, COLLAB_RUNTIME_ROOT: root, PATH: `${mockBin}:${process.env.PATH}`, CURL_CALLS: calls },
+      encoding: 'utf8',
+    })
+    expect(fs.existsSync(dir)).toBe(true)
+  })
+
+  it('verwijdert een onaf team dat de bereikbare service niet meer kent', () => {
+    const dir = makeDir(root, 'team-gone', { 'messages.jsonl': '{}\n' }, true)
+    execFileSync(CLEANUP, ['--force'], {
+      env: {
+        ...process.env,
+        COLLAB_RUNTIME_ROOT: root,
+        PATH: `${mockBin}:${process.env.PATH}`,
+        CURL_CALLS: path.join(root, 'curl-calls'),
+        CURL_HTTP_CODE: '404',
+      },
+      encoding: 'utf8',
+    })
+    expect(fs.existsSync(dir)).toBe(false)
   })
 
   it('removes an old unfinished directory with messages once its processes are dead', () => {

@@ -116,10 +116,9 @@ hoort_bij_levend_team() {
 while IFS=$'\t' read -r SESSIE GESTART; do
   [ -z "$SESSIE" ] && continue
   # Only our own sessions. Everything else is someone's work.
-  case "$SESSIE" in
-    collab-*|ensemble-*) ;;
-    *) continue ;;
-  esac
+  if [[ ! "$SESSIE" =~ ^collab-[0-9]{13}-[0-9]{4}-[a-zA-Z0-9._-]+$ && ! "$SESSIE" =~ ^ensemble-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    continue
+  fi
   case "$GESTART" in ''|*[!0-9]*) GESTART="$NOW" ;; esac
   AGE=$((NOW - GESTART))
   AGE_H=$((AGE / 3600))

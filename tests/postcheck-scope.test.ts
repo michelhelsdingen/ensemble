@@ -130,6 +130,18 @@ describe('postcheck scope', () => {
     expect(uit).toContain('collab-rescue.sh asymmetrisch-team agy-2')
     expect(uit).not.toContain('agents healthy')
   })
+
+  it('meldt een sessie zonder prompt apart en neemt hem niet op in het rescue-commando', () => {
+    const dir = path.join(root, 'losse-sessie')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'sessions'), 'losse-sessie-codex-7\n')
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), '')
+
+    const uit = draaiPostcheck('losse-sessie', 'ready')
+
+    expect(uit).toContain('sessie zonder promptbestand: losse-sessie-codex-7')
+    expect(uit).not.toContain('collab-rescue.sh losse-sessie losse-sessie-codex-7')
+  })
 })
 
 /**
