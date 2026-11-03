@@ -14,6 +14,7 @@ set -uo pipefail
 
 TEAM_ID="${1:?Usage: collab-postcheck.sh <team-id> [wait-seconds]}"
 WAIT="${2:-30}"
+API="${ENSEMBLE_URL:-http://localhost:23000}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=collab-paths.sh
 . "$SCRIPT_DIR/collab-paths.sh"
@@ -119,6 +120,28 @@ if [ "$ERRORS_FOUND" -gt 0 ]; then
   echo "  Then re-run /collab" >&2
   exit 2
 fi
+
+# De service weet per agent of de prompt is aangekomen. Dat weegt zwaarder dan
+# "heeft nog niets gezegd": gemeten 03-11-2026 (team ee1b35b0) riep de postcheck
+# 30 seconden na de start dat glm-1 niets had gestuurd, terwijl die de prompt
+# had aangenomen en twee minuten later zijn conclusie postte. Alleen als de
+# service zegt dat de aflevering écht mislukte, of als ze niets weet, klagen we.
+DELIVERY_STATE=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | team_delivery_state)
+case "$DELIVERY_STATE" in
+  failed*)
+    SILENT_AGENTS=$(printf '%s\n' ${DELIVERY_STATE#failed })
+    ;;
+  confirmed)
+    SILENT_AGENTS=""
+    ;;
+  delivered*)
+    STILLE="${DELIVERY_STATE#delivered }"
+    SILENT_AGENTS=""
+    echo -e "${GRN}✓${R} Prompt is bij alle agents aangekomen; $MSG_COUNT berichten tot nu toe"
+    [ -n "$STILLE" ] && echo -e "  ${YEL}!${R} Nog geen bericht van: $STILLE — die denkt nog, dat is geen storing"
+    exit 0
+    ;;
+esac
 
 if [ -n "$SILENT_AGENTS" ]; then
   echo -e "${RED}✗${R} Geen bericht ontvangen van deze agent(s) na ${WAIT}s:" >&2

@@ -45,6 +45,17 @@ exit 0
 `,
     { mode: 0o755 },
   )
+
+  // Nep-curl: geeft de teamstatus terug die de test voorschrijft. Zonder
+  // TEST_TEAM_JSON faalt hij, net als een onbereikbare service.
+  fs.writeFileSync(
+    path.join(bin, 'curl'),
+    `#!/bin/bash
+if [ -z "\${TEST_TEAM_JSON:-}" ]; then exit 7; fi
+printf '%s' "\$TEST_TEAM_JSON"
+`,
+    { mode: 0o755 },
+  )
 })
 
 afterEach(() => {
@@ -52,10 +63,11 @@ afterEach(() => {
   fs.rmSync(bin, { recursive: true, force: true })
 })
 
-function draaiPostcheck(teamId: string, capture = ''): string {
+function draaiPostcheck(teamId: string, capture = '', teamJson = ''): string {
   try {
     return execFileSync(POSTCHECK, [teamId, '0'], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLAB_RUNTIME_ROOT: root, TEST_CAPTURE: capture },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLAB_RUNTIME_ROOT: root, TEST_CAPTURE: capture,
+        TEST_TEAM_JSON: teamJson },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -116,5 +128,51 @@ describe('postcheck scope', () => {
     expect(uit).toMatch(/stil|geen bericht/i)
     expect(uit).toContain('collab-rescue.sh asymmetrisch-team agy-2')
     expect(uit).not.toContain('agents healthy')
+  })
+})
+
+/**
+ * Een agent die zijn prompt heeft aangenomen en nog denkt, is geen storing.
+ *
+ * Gemeten 03-11-2026 (team ee1b35b0): 30 seconden na de start riep de postcheck
+ * "Geen bericht ontvangen van deze agent(s)" over glm-1, die gewoon aan het werk
+ * was en twee minuten later zijn conclusie stuurde. De postcheck moet daarom
+ * dezelfde afleverstaat gebruiken als de launcher, en alleen klagen als de
+ * prompt echt niet is aangekomen.
+ */
+describe('postcheck en de afleverstaat van de service', () => {
+  function teamMet(agents: Array<[string, string]>, sprekers: string[]): string {
+    return JSON.stringify({
+      team: {
+        id: 'statusteam', name: 'statusteam',
+        agents: agents.map(([name, delivery]) => ({ name, status: 'active', delivery })),
+      },
+      messages: sprekers.map(from => ({ from, content: 'hoi' })),
+    })
+  }
+
+  function zetTeamKlaar(naam: string): void {
+    const dir = path.join(root, naam)
+    fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompts', 'codex-1.txt'), 'prompt')
+    fs.writeFileSync(path.join(dir, 'prompts', 'glm-2.txt'), 'prompt')
+    fs.writeFileSync(path.join(dir, 'sessions'), `${naam}-codex-1\n${naam}-glm-2\n`)
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), JSON.stringify({ from: 'codex-1', content: 'hoi' }) + '\n')
+  }
+
+  it('klaagt niet over een agent die de prompt aannam en nog denkt', () => {
+    zetTeamKlaar('statusteam')
+    const uit = draaiPostcheck('statusteam', 'ready', teamMet([['codex-1', 'confirmed'], ['glm-2', 'silent']], ['codex-1']))
+    expect(uit).not.toMatch(/Geen bericht ontvangen/i)
+    expect(uit).not.toContain('collab-rescue.sh')
+    expect(uit).toMatch(/glm-2/)
+    expect(uit).toMatch(/aangekomen/i)
+  })
+
+  it('klaagt wel als de prompt echt niet is aangekomen', () => {
+    zetTeamKlaar('faalteam')
+    const uit = draaiPostcheck('faalteam', 'ready', teamMet([['codex-1', 'confirmed'], ['glm-2', 'failed']], ['codex-1']))
+    expect(uit).toMatch(/glm-2/)
+    expect(uit).toContain('collab-rescue.sh faalteam glm-2')
   })
 })
