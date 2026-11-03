@@ -51,6 +51,7 @@ exit 0
   fs.writeFileSync(
     path.join(bin, 'curl'),
     `#!/bin/bash
+echo "$@" >> "${path.join(bin, 'curl-aanroepen.log')}"
 if [ -z "\${TEST_TEAM_JSON:-}" ]; then exit 7; fi
 printf '%s' "\$TEST_TEAM_JSON"
 `,
@@ -174,5 +175,62 @@ describe('postcheck en de afleverstaat van de service', () => {
     const uit = draaiPostcheck('faalteam', 'ready', teamMet([['codex-1', 'confirmed'], ['glm-2', 'failed']], ['codex-1']))
     expect(uit).toMatch(/glm-2/)
     expect(uit).toContain('collab-rescue.sh faalteam glm-2')
+  })
+})
+
+/**
+ * De taaktekst staat zelf in de pane.
+ *
+ * Gevonden door het reviewteam van 03-11-2026 (team 40d536c0): postcheck grept
+ * het hele zichtbare scherm af op "Not logged in", "failed to lookup address"
+ * en "401 Unauthorized", en de geplakte prompt staat daar ook. Een collab OVER
+ * een inlogfout of een DNS-storing maakte dus dertig seconden na een geslaagde
+ * start zijn eigen team dood, buiten de API om, dus zonder disband, zonder
+ * samenvatting en met een monitor die open bleef staan.
+ */
+describe('postcheck en de prompttekst in de pane', () => {
+  function zetTeamKlaar(naam: string, prompt: string): void {
+    const dir = path.join(root, naam)
+    fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompts', 'codex-1.txt'), prompt)
+    fs.writeFileSync(path.join(dir, 'sessions'), `${naam}-codex-1\n`)
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), JSON.stringify({ from: 'codex-1', content: 'hoi' }) + '\n')
+  }
+
+  const TAAK = 'Zoek uit waarom de gebruiker Not logged in ziet en of 401 Unauthorized van de proxy komt.'
+
+  it('kilt geen team om de eigen taaktekst in de pane', () => {
+    zetTeamKlaar('team-taaktekst', TAAK)
+    const uit = draaiPostcheck('team-taaktekst', TAAK)
+    expect(gekildeSessies()).toEqual([])
+    expect(uit).not.toMatch(/NOT LOGGED IN/)
+  })
+
+  it('kilt wel bij een foutregel die niet uit de prompt komt', () => {
+    zetTeamKlaar('team-echtefout', 'Maak de tests groen.')
+    const uit = draaiPostcheck('team-echtefout', 'Not logged in\nPlease run /login')
+    expect(gekildeSessies()).toEqual(['team-echtefout-codex-1'])
+    expect(uit).toMatch(/NOT LOGGED IN/)
+  })
+})
+
+/**
+ * Een echte fout hoort via het disband-endpoint te gaan, niet via een kale
+ * tmux-kill: anders blijft het team "active" in het register, komt er geen
+ * samenvatting, blijven worktrees staan en blijft de monitor-pane open.
+ * Aanbeveling van het reviewteam van 03-11-2026, door beide agents onderschreven.
+ */
+describe('postcheck ruimt op via de service', () => {
+  it('vraagt disband aan voordat het zelf sessies kilt', () => {
+    const dir = path.join(root, 'team-disband')
+    fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompts', 'codex-1.txt'), 'Maak de tests groen.')
+    fs.writeFileSync(path.join(dir, 'sessions'), 'team-disband-codex-1\n')
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), '')
+    draaiPostcheck('team-disband', 'Not logged in', JSON.stringify({ team: { agents: [] } }))
+    const aanroepen = fs.existsSync(path.join(bin, 'curl-aanroepen.log'))
+      ? fs.readFileSync(path.join(bin, 'curl-aanroepen.log'), 'utf8')
+      : ''
+    expect(aanroepen).toMatch(/teams\/team-disband\/disband/)
   })
 })

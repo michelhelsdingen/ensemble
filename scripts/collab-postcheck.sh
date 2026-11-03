@@ -46,8 +46,39 @@ sleep "$WAIT"
 ERRORS_FOUND=0
 ERROR_LOG=""
 
+# De prompt van dit team, om hem straks uit de pane-tekst te filteren. De
+# taaktekst staat namelijk zelf in de pane: een collab OVER een inlogfout of een
+# DNS-storing matchte op zijn eigen opdracht en maakte zijn team dood.
+# Gevonden 03-11-2026 door het reviewteam.
+PROMPT_TEKST=""
+if [ -d "$RD/prompts" ]; then
+  PROMPT_TEKST=$(cat "$RD/prompts/"*.txt 2>/dev/null || true)
+fi
+
+# Houd alleen de pane-regels over die niet uit de prompt komen. De prompt gaat
+# als argument mee, niet via stdin: met een heredoc voor de python-code is stdin
+# al bezet, en dan filtert dit niets (nagemeten).
+nieuwe_uitvoer() {
+  python3 -c '
+import sys
+
+pane, prompt = sys.argv[1], " ".join(sys.argv[2].split())
+for regel in pane.splitlines():
+    kern = " ".join(regel.split())
+    if not kern:
+        continue
+    # Een regel die letterlijk in de prompt staat (ook afgebroken door de
+    # pane-breedte) is onze eigen opdracht, geen uitvoer van de agent.
+    if len(kern) > 8 and kern in prompt:
+        continue
+    print(regel)
+' "$1" "$2"
+}
+
 for s in $SESSIONS; do
-  PANE_OUT=$(tmux capture-pane -t "$s" -p 2>/dev/null || true)
+  PANE_RUW=$(tmux capture-pane -t "$s" -p 2>/dev/null || true)
+  if [ -z "$PANE_RUW" ]; then continue; fi
+  PANE_OUT=$(nieuwe_uitvoer "$PANE_RUW" "$PROMPT_TEKST")
   if [ -z "$PANE_OUT" ]; then continue; fi
 
   # Check for known fatal error patterns
@@ -112,6 +143,15 @@ if [ "$ERRORS_FOUND" -gt 0 ]; then
   echo -e "${RED}✗ Postcheck FAILED — $ERRORS_FOUND agent(s) in error state${R}" >&2
   echo -e "$ERROR_LOG" >&2
   echo -e "\n${YEL}Disbanding team $TEAM_ID...${R}" >&2
+  # Eerst via de service, dan pas zelf. Een kale tmux-kill laat het team "active"
+  # in het register staan, schrijft geen samenvatting en ruimt de worktrees en de
+  # monitor-pane niet op; disband doet dat allemaal. Lukt de API niet, dan killen
+  # we alsnog zelf, want een kapot team moet weg.
+  if curl -sf -X POST "$API/api/ensemble/teams/$TEAM_ID/disband" > /dev/null 2>&1; then
+    echo -e "  ${YEL}!${R} Team opgeheven via de service" >&2
+  else
+    echo -e "  ${YEL}!${R} Service onbereikbaar, sessies zelf gestopt" >&2
+  fi
   for s in $SESSIONS; do tmux kill-session -t "$s" 2>/dev/null || true; done
   [ -f "$RD/bridge.pid" ] && kill "$(cat $RD/bridge.pid)" 2>/dev/null || true
   [ -f "$RD/poller.pid" ] && kill "$(cat $RD/poller.pid)" 2>/dev/null || true
