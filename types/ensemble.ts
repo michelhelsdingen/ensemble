@@ -34,8 +34,14 @@ export interface EnsembleTeamAgent {
    * How far the prompt got. 'confirmed' means this agent has posted a message,
    * which is the only proof its prompt was executed. The launcher waits on
    * this instead of counting seconds.
+   *
+   * 'silent' and 'failed' are not the same thing and must not be reported as
+   * one: 'failed' means the pane took nothing (a dialog, a dead CLI), 'silent'
+   * means the prompt arrived and the agent has not spoken yet. Measured
+   * 03-11-2026, glm needed over a minute for its first message, and calling
+   * that a failed delivery sent the reader looking in the wrong place.
    */
-  delivery?: 'pending' | 'delivered' | 'confirmed' | 'failed'
+  delivery?: 'pending' | 'delivered' | 'confirmed' | 'silent' | 'failed'
   worktreePath?: string
   worktreeBranch?: string
 }

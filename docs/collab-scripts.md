@@ -94,11 +94,18 @@ instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the reco
 | 4 | Bridge or poller process died immediately after starting |
 
 The launcher waits on evidence instead of on the clock. The service records per agent how far
-its prompt got (`pending`, `delivered`, `confirmed`, `failed`), where `confirmed` means that agent
-posted a message itself, and the launcher polls the team until everyone is confirmed or one has
-failed, up to `COLLAB_AGENT_WAIT_SECS` (120 by default). A failed delivery is reported within
-seconds rather than after a fixed window; against a service that does not know the field, the
-launcher falls back to counting messages against the session register.
+its prompt got (`pending`, `delivered`, `confirmed`, `silent`, `failed`), where `confirmed` means
+that agent posted a message itself, and the launcher polls the team until everyone is confirmed or
+one has failed, up to `COLLAB_AGENT_WAIT_SECS` (120 by default). A failed delivery is reported
+within seconds rather than after a fixed window; against a service that does not know the field,
+the launcher falls back to counting messages against the session register.
+
+`silent` and `failed` are deliberately different. `failed` means the pane took nothing: a dialog,
+a dead CLI, a shell in the foreground. `silent` means the prompt was taken and the agent has not
+spoken yet after three asks, which is not a delivery problem and not worth a rescue. Measured
+03-11-2026, glm needed over a minute for its first message and the old wording ("did not respond
+after 3 prompt attempts") sent the reader looking in the wrong place. A message in the feed also
+outweighs the recorded state, so an agent that speaks late still counts as confirmed.
 
 Every exit that happens after the team is created prints a `TEAM_ID=<id>` trailer, including the
 failing ones, so a caller can always find the runtime directory to investigate or rescue. Grep

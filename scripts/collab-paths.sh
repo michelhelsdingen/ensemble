@@ -162,9 +162,14 @@ stop_team_processes() {
 #
 # Echoot één van:
 #   confirmed        elke meetellende agent heeft een bericht gestuurd
-#   failed <namen>   minstens één aflevering is mislukt
-#   pending          nog onderweg
+#   failed <namen>   minstens één AFLEVERING is mislukt (de pane nam niets aan)
+#   pending          nog onderweg, een stille agent inbegrepen
 #   unknown          geen bruikbaar antwoord, of een service zonder dit veld
+#
+# Een bericht in de feed telt zwaarder dan de staat: op 03-11-2026 had glm meer
+# dan 60s nodig voor zijn eerste bericht, dus de bevestigingslus gaf op terwijl
+# de prompt gewoon was aangekomen. Dat is geen mislukte aflevering, en de
+# melding mag dat ook niet zeggen.
 #
 # Tot 03-11-2026 wachtte de launcher 12 seconden en keek dan naar
 # messages.jsonl. Dat is te vroeg voor een agent die nog opstart en veel te
@@ -184,10 +189,12 @@ if not isinstance(agents, list):
 telt = [a for a in agents if isinstance(a, dict) and a.get('status') not in ('replaced', 'done')]
 if not telt or not any(a.get('delivery') for a in telt):
     print('unknown'); sys.exit(0)
-mislukt = [a.get('name', '?') for a in telt if a.get('delivery') == 'failed']
+sprekers = {m.get('from') for m in (data.get('messages') or []) if isinstance(m, dict)}
+mislukt = [a.get('name', '?') for a in telt
+           if a.get('delivery') == 'failed' and a.get('name') not in sprekers]
 if mislukt:
     print('failed ' + ' '.join(mislukt)); sys.exit(0)
-if all(a.get('delivery') == 'confirmed' for a in telt):
+if all(a.get('delivery') == 'confirmed' or a.get('name') in sprekers for a in telt):
     print('confirmed'); sys.exit(0)
 print('pending')
 " 2>/dev/null || printf 'unknown\n'

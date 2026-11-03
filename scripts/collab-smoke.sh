@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # collab-smoke.sh — Start a real team, exchange a message, break it down cleanly.
-# Usage: collab-smoke.sh [--runs N] [--agents a,b] [--keep]
+# Usage: collab-smoke.sh [--runs N] [--agents a,b] [--monitor mode] [--keep]
 #
 # One run proves the whole chain on this machine: preflight, spawn, readiness,
 # prompt delivery, a message in both directions, disband, and no tmux session
-# left behind. Repeat it; a chain that only works once is not fixed.
+# left behind, the monitor's own session included. Repeat it; a chain that only
+# works once is not fixed.
 #
 # Default line-up is glm (sendKeys) + grok (pasteFromFile) so both delivery
-# paths are exercised, with agents that are cheap to run. The task is as small
-# as a task can be: greet, read, answer in one line, done.
+# paths are exercised, with agents that are cheap to run. --agents "" leaves the
+# choice to the configured plan, which is the path a real launch takes. The task
+# is as small as a task can be: greet, read, answer in one line, done.
+#
+# --monitor takes what COLLAB_MONITOR takes (none, tmux, iterm, herdr, orca).
+# Default none; use tmux to prove the monitor session is cleaned up too.
+# --template takes a key from collab-templates.json (review, implement,
+# research, debug), the path the 03-11 failure went down.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,13 +24,18 @@ source "$SCRIPT_DIR/collab-paths.sh"
 
 RUNS=1
 AGENTS="${COLLAB_SMOKE_AGENTS:-glm,grok}"
+AGENTS_GEZET=0
+MONITOR="${COLLAB_SMOKE_MONITOR:-none}"
+TEMPLATE="${COLLAB_SMOKE_TEMPLATE:-}"
 KEEP=0
 API="${ENSEMBLE_URL:-http://localhost:23000}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) shift; RUNS="${1:-1}" ;;
-    --agents) shift; AGENTS="${1:-}" ;;
+    --agents) shift; AGENTS="${1:-}"; AGENTS_GEZET=1 ;;
+    --monitor) shift; MONITOR="${1:-none}" ;;
+    --template) shift; TEMPLATE="${1:-}" ;;
     --keep) KEEP=1 ;;
     -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 1 ;;
@@ -42,7 +54,8 @@ GESLAAGD=0
 MISLUKT=0
 
 for RUN in $(seq 1 "$RUNS"); do
-  printf "\n  ${BD}rookproef %s/%s${R} ${D}(%s)${R}\n" "$RUN" "$RUNS" "$AGENTS"
+  printf "\n  ${BD}rookproef %s/%s${R} ${D}(%s, monitor %s, sjabloon %s)${R}\n" \
+    "$RUN" "$RUNS" "${AGENTS:-plan kiest}" "$MONITOR" "${TEMPLATE:-geen}"
   WERKMAP=$(mktemp -d "${TMPDIR:-/tmp}/collab-smoke-XXXXXX")
   UITVOER=$(mktemp "${TMPDIR:-/tmp}/collab-smoke-out-XXXXXX")
   RUN_OK=1
@@ -51,8 +64,8 @@ for RUN in $(seq 1 "$RUNS"); do
   # loopt. Nagekeken op 03-11-2026 dat hij een langzamer startend team niet
   # doodt: hij grijpt alleen in bij fatale paneteksten (niet ingelogd, DNS,
   # 401) en adviseert bij stilte alleen een rescue.
-  COLLAB_MONITOR=none \
-    "$SCRIPT_DIR/collab-launch.sh" "$WERKMAP" "$TAAK" "$AGENTS" > "$UITVOER" 2>&1
+  COLLAB_MONITOR="$MONITOR" \
+    "$SCRIPT_DIR/collab-launch.sh" "$WERKMAP" "$TAAK" "$AGENTS" "$TEMPLATE" > "$UITVOER" 2>&1
   LAUNCH_EXIT=$?
   TEAM_ID=$(grep -o 'TEAM_ID=[0-9a-f-]*' "$UITVOER" | tail -1 | cut -d= -f2)
 
@@ -100,15 +113,14 @@ print(' '.join(sorted(namen - sprekers)) or 'ALLEMAAL')
 
   # Niets mag overblijven. Dit is de controle die vier dagen lang niemand deed.
   RESTANTEN=""
-  if [ -n "$TEAM_NAAM" ]; then
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      RESTANTEN=$(tmux ls 2>/dev/null | cut -d: -f1 | grep "^${TEAM_NAAM}-" || true)
-      [ -z "$RESTANTEN" ] && break
-      sleep 1
-    done
-  fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    RESTANTEN=$(tmux ls 2>/dev/null | cut -d: -f1 \
+      | grep -E "^(${TEAM_NAAM:-__geen__}-|ensemble-${TEAM_ID}\$)" || true)
+    [ -z "$RESTANTEN" ] && break
+    sleep 1
+  done
   if [ -z "$RESTANTEN" ]; then
-    pass "geen tmux-sessie van dit team over"
+    pass "geen tmux-sessie van dit team over, monitor inbegrepen"
   else
     fout "sessies blijven draaien: $(printf '%s' "$RESTANTEN" | tr '\n' ' ')"
     RUN_OK=0

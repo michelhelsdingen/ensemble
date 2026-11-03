@@ -924,7 +924,13 @@ describe('worktree isolation lifecycle', () => {
       await vi.advanceTimersByTimeAsync(90_000)
       await creation
       expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(3)
-      expect(appendedMessages.some(message => message.content.includes('codex-1 did not respond after 3 prompt attempts'))).toBe(true)
+      // De melding zegt niet meer "aflevering mislukt": de pane nam de prompt
+      // aan, deze agent heeft alleen nog niets gezegd. Gemeten 03-11-2026 bij
+      // glm, dat meer dan een minuut nodig had voor zijn eerste bericht.
+      expect(appendedMessages.some(message =>
+        /codex-1 took the prompt but has not sent a message yet/.test(message.content)
+        && /not a delivery failure/i.test(message.content),
+      )).toBe(true)
     } finally {
       vi.useRealTimers()
     }

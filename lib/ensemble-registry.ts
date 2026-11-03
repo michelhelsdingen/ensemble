@@ -188,6 +188,7 @@ export function setAgentDelivery(
     const team = teams.find(team => team.id === teamId)
     const agent = team?.agents.find(candidate => candidate.name === agentName)
     if (!agent) return
+    // 'silent' is niet eindig: een trage agent mag later alsnog confirmed worden.
     if (agent.delivery === 'confirmed' || agent.delivery === 'failed') return
     agent.delivery = delivery
     writeTeamsFile(teams)

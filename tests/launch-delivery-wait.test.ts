@@ -21,6 +21,8 @@ function state(team: unknown): string {
   }).trim()
 }
 
+const bericht = (from: string) => ({ from, to: 'team', content: 'hoi', type: 'chat' })
+
 const agent = (name: string, delivery?: string, status = 'active') => ({
   agentId: 'a', name, program: name.split('-')[0], role: 'lead', hostId: 'local', status,
   ...(delivery && { delivery }),
@@ -51,6 +53,30 @@ describe('team_delivery_state', () => {
         ],
       },
     })).toBe('confirmed')
+  })
+
+  it('noemt een agent die wel praatte confirmed, ook als de bevestiging te laat kwam', () => {
+    // 03-11-2026 gemeten: glm had meer dan 60s nodig voor zijn eerste bericht,
+    // dus confirmPromptStart gaf op terwijl de prompt gewoon was aangekomen.
+    // Een bericht in de feed is het bewijs; dat telt zwaarder dan de staat.
+    expect(state({
+      team: { agents: [agent('codex-1', 'confirmed'), agent('glm-2', 'silent')] },
+      messages: [bericht('codex-1'), bericht('glm-2')],
+    })).toBe('confirmed')
+  })
+
+  it('wacht door bij een stille agent in plaats van hem mislukt te noemen', () => {
+    expect(state({
+      team: { agents: [agent('codex-1', 'confirmed'), agent('glm-2', 'silent')] },
+      messages: [bericht('codex-1')],
+    })).toBe('pending')
+  })
+
+  it('blijft failed melden bij een echte afleverfout', () => {
+    expect(state({
+      team: { agents: [agent('codex-1', 'confirmed'), agent('glm-2', 'failed')] },
+      messages: [bericht('codex-1')],
+    })).toBe('failed glm-2')
   })
 
   it('is pending bij een service die dit veld niet kent', () => {

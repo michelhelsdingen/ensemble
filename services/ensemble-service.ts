@@ -1247,11 +1247,16 @@ export async function createEnsembleTeam(
             setAgentDelivery(team.id, agent.name, 'confirmed')
             console.log(`[Ensemble] Prompt confirmed by message from ${agent.name}`)
           } else {
-            setAgentDelivery(team.id, agent.name, 'failed')
-            console.error(`[Ensemble] Prompt unconfirmed after 3 attempts: ${agent.name} (${sessionName})`)
+            // Stil is niet hetzelfde als mislukt. De prompt is aangekomen (de
+            // pane nam hem aan, anders had deliverChecked gegooid); deze agent
+            // heeft alleen nog niets gezegd. Gemeten 03-11-2026: glm had meer
+            // dan een minuut nodig voor zijn eerste bericht, en "aflevering
+            // mislukt" stuurde de lezer naar de verkeerde plek.
+            setAgentDelivery(team.id, agent.name, 'silent')
+            console.warn(`[Ensemble] Prompt delivered but no message yet after 3 asks: ${agent.name} (${sessionName})`)
             appendMessage(team.id, {
               id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-              content: `❌ ${agent.name} did not respond after 3 prompt attempts; inspect the agent pane`,
+              content: `⚠ ${agent.name} took the prompt but has not sent a message yet after 3 asks. Not a delivery failure; the agent may still be working.`,
               type: 'chat', timestamp: new Date().toISOString(),
             })
           }
