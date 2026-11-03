@@ -908,33 +908,58 @@ describe('worktree isolation lifecycle', () => {
     }
   })
 
-  it('retries an unconfirmed prompt and names the silent agent after three attempts', async () => {
+  it('meldt een pane die niets aanneemt als afleverfout, niet als stille agent', async () => {
+    // Een pane die na het afleveren stil blijft staan heeft de prompt niet
+    // verwerkt. Die krijgt hem één keer opnieuw, en neemt hij hem dan nog niet
+    // aan, dan is dat een echte afleverfout: de launcher mag daarover klagen.
+    // Verschil met de test hieronder: daar verandert de pane wel, en dan is
+    // zwijgen gewoon denktijd.
     vi.useFakeTimers()
     try {
       const team = makeTeam({ agents: [makeTeam().agents[0]] })
       const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
-      // De pane neemt de prompt wel aan (het scherm verandert), de agent zwijgt
-      // alleen. Dat is het geval waarvoor de drie pogingen bedoeld zijn; een
-      // pane die niets doet wordt sinds 03-11-2026 na één poging gemeld.
-      let beeld = 0
-      mocks.runtime.capturePane.mockImplementation(async () => `> regel ${beeld++}`)
+      let afgeleverd = false
+      mocks.runtime.sendKeys.mockImplementation(async () => { afgeleverd = true })
+      mocks.runtime.capturePane.mockImplementation(async () => afgeleverd ? '> na' : '> voor')
       const creation = mod.createEnsembleTeam({
         name: team.name, description: team.description, agents: [{ program: 'codex' }],
       })
       await vi.advanceTimersByTimeAsync(90_000)
       await creation
-      expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(3)
-      // De melding zegt niet meer "aflevering mislukt": de pane nam de prompt
-      // aan, deze agent heeft alleen nog niets gezegd. Gemeten 03-11-2026 bij
-      // glm, dat meer dan een minuut nodig had voor zijn eerste bericht.
+      expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(2)
       expect(appendedMessages.some(message =>
-        /codex-1 took the prompt but has not sent a message yet/.test(message.content)
-        && /not a delivery failure/i.test(message.content),
+        /codex-1 prompt verification failed/.test(message.content)
+        && /the pane did not change/.test(message.content),
       )).toBe(true)
     } finally {
       vi.useRealTimers()
     }
-  })
+  }, 30_000)
+
+  it('stuurt een werkende agent zijn prompt niet opnieuw', async () => {
+    // Gemeten 03-11-2026 (team ee1b35b0): glm-1 had de prompt aangenomen en was
+    // aan het werk, maar had na 20s nog niets gezegd, dus kreeg hij hem er nog
+    // twee keer bovenop. Zijn eerste bericht kwam pas na 2m40s. Een pane die
+    // verandert, is bezig; die laten we met rust.
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      let beeld = 0
+      mocks.runtime.capturePane.mockImplementation(async () => `> regel ${beeld++}`)
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(200_000)
+      await creation
+      expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(1)
+      expect(appendedMessages.some(message =>
+        /codex-1 took the prompt but has not sent a message yet/.test(message.content),
+      )).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
 
   it('marks an agent failed when normal team message delivery finds no agent', async () => {
     const team = makeTeam({ agents: [makeTeam().agents[0]] })

@@ -53,7 +53,7 @@ const IDLE_CHECK_INTERVAL_MS = 15_000
 // How long a freshly typed start command may leave the shell in the foreground
 // before the agent counts as not started (a wrapper script execs quickly).
 const AGENT_START_GRACE_MS = 5_000
-const READY_POLL_MS = 500
+const READY_POLL_MS = 250
 const COMPLETION_GRACE_MS = 60_000
 const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // How long a team must be silent before completion WORDING may end it.
@@ -1093,7 +1093,10 @@ export async function createEnsembleTeam(
       await new Promise(r => setTimeout(r, 3000))
     }
 
-    await new Promise(r => setTimeout(r, 2000))
+    // Hier stond een vaste 2 seconden voor elk team, ook als elke agent al
+    // gereed was. Die was dood gewicht: deliverChecked hieronder kijkt direct
+    // voor het plakken opnieuw naar de pane en eist 'ready', dus de wachttijd
+    // voegde geen zekerheid toe, alleen twee seconden aan elke teamstart.
 
     // Phase 3: Inject prompts (skip if staged — staged workflow handles its own prompts)
     // Staged coordination requires multiple agents; a solo agent uses normal delivery.
@@ -1236,8 +1239,24 @@ export async function createEnsembleTeam(
       for (const result of deliveryResults) {
         if (!result) continue
         const { agent, sessionName, deliver } = result
+        // De pane zoals hij er vlak na het afleveren uitzag. Verandert hij nog,
+        // dan is deze agent aan het werk en krijgt hij zijn prompt niet opnieuw.
+        // Gemeten 03-11-2026 (team ee1b35b0): glm-1 kreeg de prompt na 20s en
+        // na 40s nog twee keer geplakt terwijl hij gewoon nadacht, en deed er
+        // daardoor 2m40s over zijn eerste bericht.
+        const local = !agent.hostId || isSelf(agent.hostId)
+        let vorigePane = local ? await runtime.capturePane(sessionName, 50).catch(() => '') : ''
         void confirmPromptStart({
           hasStarted: () => getMessages(team.id).some(message => message.from === agent.name),
+          busy: async () => {
+            if (!local) return false
+            try {
+              const nu = await runtime.capturePane(sessionName, 50)
+              const veranderd = nu !== vorigePane
+              vorigePane = nu
+              return veranderd
+            } catch { return false }
+          },
           retry: async () => {
             console.warn(`[Ensemble] No message from ${agent.name}; retrying prompt submission to ${sessionName}`)
             await deliver()
