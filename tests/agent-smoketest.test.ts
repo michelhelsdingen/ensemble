@@ -23,6 +23,11 @@ describe.skipIf(!hasTmux)('agent smoketest with isolated tmux sockets', () => {
       broken: '#!/bin/sh\nif [ "$1" = --version ]; then exit 2; fi\necho launch failed\nexit 7\n',
       gated: '#!/usr/bin/env node\nif (process.argv[2] === "--version") process.exit(2)\nconsole.log("◆\\n● No, exit (recommended)\\n○ Yes, I accept the risks and want to skip permissions")\nprocess.stdin.once("data", () => { console.log("READY_MARKER"); setInterval(() => {}, 1000) })\n',
       alternate: '#!/bin/sh\nif [ "$1" = --version ]; then exit 2; fi\nprintf "\\033[?1049h\\033[2J\\033[H❯\\n"\nexec sleep 60\n',
+      // 03-11-2026 gemeten: codex 0.164.0 opent een modale "Hooks need review"
+      // met '›' als selectiepijl, precies zijn readyMarker. De smoketest zei
+      // codex=ok in 1,29s terwijl de CLI niets aannam, dus preflight was groen
+      // en elk team startte stil stuk.
+      hooked: '#!/bin/sh\nif [ "$1" = --version ]; then exit 2; fi\nprintf "  Hooks need review\\n  6 hooks are new or changed.\\n\\n> 1. Review hooks\\n  2. Trust all and continue\\n\\n  enter confirm \\xc2\\xb7 esc skip\\n"\nexec sleep 60\n',
     }
     for (const [name, body] of Object.entries(scripts)) fs.writeFileSync(path.join(bin, name), body, { mode: 0o755 })
     const agent = (command: string, marker: string, flags: string[] = [], unsetEnv?: string[]) => ({
@@ -35,6 +40,7 @@ describe.skipIf(!hasTmux)('agent smoketest with isolated tmux sockets', () => {
       gated: agent('gated', 'READY_MARKER'),
       alternate: agent('alternate', '❯'),
       absent: agent('absent-test-command', 'EXPECTED_MARKER'),
+      hooked: agent('hooked', '>'),
     }))
     fs.writeFileSync(path.join(base, 'config.json'), JSON.stringify({ agentEnv: { TEST_VALUE: 'forwarded', OPENAI_BLOCKED: 'restored' } }))
   })
@@ -69,12 +75,22 @@ describe.skipIf(!hasTmux)('agent smoketest with isolated tmux sockets', () => {
     expect(stderr).toContain('ready=ok')
   }, 15000)
 
+  // 6s in plaats van 3s: na een bevestigde dialoog moet de gereedheid nog
+  // READY_STABLE_MS aanhouden, en de bevestiging zelf kost al 1,2s.
   it('handles a startup gate and a ready marker on an alternate screen', async () => {
-    const { code, stdout } = await run(['gated', 'alternate'], 3)
+    const { code, stdout } = await run(['gated', 'alternate'], 6)
     const results = JSON.parse(stdout)
     expect(code).toBe(0)
     expect(results.gated).toMatchObject({ status: 'ok', gates: ['skip permissions warning'] })
     expect(results.alternate).toMatchObject({ status: 'ok', gates: [] })
+  }, 15000)
+
+  it('noemt een dialoog die niemand voor de gebruiker mag wegklikken een blokkade', async () => {
+    const { code, stdout } = await run(['hooked'], 3)
+    const results = JSON.parse(stdout)
+    expect(results.hooked.status).toBe('blocked')
+    expect(results.hooked.detail).toContain('Hooks need review')
+    expect(code).toBe(1)
   }, 15000)
 
   it('exits successfully when selected agents are ready or missing', async () => {

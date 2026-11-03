@@ -113,6 +113,7 @@ describe('onboarding smoke test', () => {
     vi.restoreAllMocks()
   })
 
+  // 20s: een echte teamstart wacht tot de gereedheid van elke agent 2s aanhoudt.
   it('supports the documented quick start through health, CLI, and first team creation', async () => {
     const cliPath = path.resolve(process.cwd(), 'cli/ensemble.ts')
     const tsxPath = path.resolve(process.cwd(), 'node_modules/.bin/tsx')
@@ -175,5 +176,5 @@ describe('onboarding smoke test', () => {
     expect(teamsAfterOutput).toContain('my-first-team')
     expect(teamsAfterOutput).toContain('codex-1')
     expect(teamsAfterOutput).toContain('claude-2')
-  })
+  }, 20_000)
 })

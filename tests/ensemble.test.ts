@@ -840,7 +840,8 @@ describe('worktree isolation lifecycle', () => {
       })
       await vi.advanceTimersByTimeAsync(500)
       expect(mocks.runtime.pasteFromFile).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(5000)
+      // Gereedheid moet READY_STABLE_MS aanhouden voor er geplakt wordt.
+      await vi.advanceTimersByTimeAsync(12_000)
       expect((await creation).status).toBe(201)
       expect(mocks.runtime.capturePane).toHaveBeenCalledWith('test-team-claude-2', 50)
       expect(mocks.runtime.pasteFromFile).toHaveBeenCalledExactlyOnceWith(
@@ -895,7 +896,7 @@ describe('worktree isolation lifecycle', () => {
       const creation = mod.createEnsembleTeam({
         name: team.name, description: team.description, agents: [{ program: 'codex' }],
       })
-      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(12_000)
       await creation
       expect(appendedMessages.some(m => m.content.includes('Delivery to codex-1 failed: pane unavailable'))).toBe(true)
       expect(team.agents[0].status).toBe('failed')
@@ -1069,6 +1070,62 @@ describe('worktree isolation lifecycle', () => {
     expect(mocks.destroyWorktree).not.toHaveBeenCalled()
     expect(mocks.killRemoteAgent).toHaveBeenCalledWith('http://remote.test', 'agent-1')
   })
+
+  // 03-11-2026 gemeten: codex 0.164.0 is na 1,0s echt klaar en legt er op 1,6s
+  // een modale "Hooks need review"-dialoog over. De selectiepijl van die
+  // dialoog is de readyMarker, dus de oude toets ("staat de marker ergens in
+  // de capture") bleef ja zeggen en de prompt werd drie keer in de dialoog
+  // geplakt. Geen van beide mag nog gebeuren.
+  const ONBEKENDE_DIALOOG = [
+    '  Hooks need review',
+    '  6 hooks are new or changed.',
+    '',
+    '> 1. Review hooks',
+    '  2. Trust all and continue',
+    '',
+    '  enter confirm · esc skip',
+  ].join('\n')
+
+  it('plakt geen prompt in een onbekende dialoog en noemt die dialoog', async () => {
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      const config = await import('../lib/agent-config')
+      vi.mocked(config.resolveAgentProgram).mockReturnValue({ readyMarker: '>', inputMethod: 'pasteFromFile' } as ReturnType<typeof config.resolveAgentProgram>)
+      mocks.runtime.capturePane.mockResolvedValue(ONBEKENDE_DIALOOG)
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect((await creation).status).toBe(201)
+      expect(mocks.runtime.pasteFromFile).not.toHaveBeenCalled()
+      expect(appendedMessages.some(m => m.content.includes('Hooks need review'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ziet een dialoog die vlak na de eerste gereedheid verschijnt', async () => {
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks } = await setupWorktreeService(team)
+      const config = await import('../lib/agent-config')
+      vi.mocked(config.resolveAgentProgram).mockReturnValue({ readyMarker: '>', inputMethod: 'pasteFromFile' } as ReturnType<typeof config.resolveAgentProgram>)
+      mocks.runtime.capturePane
+        .mockResolvedValueOnce('  Codex v0.164.0\n> ')
+        .mockResolvedValue(ONBEKENDE_DIALOOG)
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(90_000)
+      await creation
+      expect(mocks.runtime.pasteFromFile).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('staged workflow integration', () => {
@@ -1203,6 +1260,8 @@ describe('staged workflow integration', () => {
     vi.unstubAllEnvs()
   })
 
+  // 15s in plaats van de standaard 5s: een echte teamstart wacht sinds
+  // 03-11-2026 tot de gereedheid 2s aanhoudt, per agent.
   it('keeps normal prompt injection when staged=false', async () => {
     const team = makeTeam({
       id: 'team-non-staged',
@@ -1225,7 +1284,7 @@ describe('staged workflow integration', () => {
 
     expect(runStagedWorkflow).not.toHaveBeenCalled()
     expect(runtime.sendKeys).toHaveBeenCalledTimes(2)
-  })
+  }, 15_000)
 })
 
 // ─────────────────────────────────────────────────────

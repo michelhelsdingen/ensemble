@@ -4,15 +4,14 @@ import os from 'os'
 import path from 'path'
 import { promisify } from 'util'
 import { buildAgentStartupCommand, loadAgentsConfig } from '../lib/agent-config'
-import { confirmLiveGate, detectLiveGate, isShellCommand } from '../lib/startup-gates'
-
-const MENU_LINE = /^[\s│]*[❯›>●○]\s*(\d+\.\s*)?(Yes|No)\b/
+import { confirmLiveGate, isShellCommand } from '../lib/startup-gates'
+import { createReadyHold, READY_STABLE_MS, readyScreenState } from '../lib/ready-screen'
 import type { AgentProgram } from '../types/agent-program'
 
 const execFileAsync = promisify(execFile)
 const pollMs = 100
 
-type Status = 'ok' | 'missing' | 'no-ready-marker' | 'crashed'
+type Status = 'ok' | 'missing' | 'no-ready-marker' | 'crashed' | 'blocked'
 interface Result { status: Status; seconds: number; gates: string[]; version?: string; detail?: string }
 
 async function tmux(socket: string, ...args: string[]): Promise<string> {
@@ -63,6 +62,11 @@ async function probe(key: string, agent: AgentProgram, timeoutSeconds: number): 
   let screen = ''
   let lastGateName = ''
   let lastGateHandledAt = 0
+  // Dezelfde stabiliteitseis als de service, want een probe die eerder
+  // toeslaat dan de echte start mist precies de dialoog die daarna komt. Nooit
+  // meer dan de helft van het tijdsbudget, zodat een korte --timeout bruikbaar
+  // blijft.
+  const held = createReadyHold(Math.min(READY_STABLE_MS, (timeoutSeconds * 1000) / 2))
   try {
     fs.mkdirSync(cwd)
     await tmux(socket, 'new-session', '-d', '-s', session, '-c', cwd, '-x', '160', '-y', '40')
@@ -80,25 +84,25 @@ async function probe(key: string, agent: AgentProgram, timeoutSeconds: number): 
         await new Promise(resolve => setTimeout(resolve, pollMs))
         continue
       }
-      const gate = detectLiveGate(screen)
-      // A marker below the last menu line of an answered dialog means the CLI moved on;
-      // a marker inside the menu itself (for example "❯ 1. Yes") does not count.
-      const lines = screen.split(/\r?\n/)
-      let lastMenuLine = -1
-      lines.forEach((line, index) => { if (MENU_LINE.test(line)) lastMenuLine = index })
-      if (gate && gates.length && lines.slice(lastMenuLine + 1).join('\n').includes(agent.readyMarker)) return result('ok')
-      if (gate) {
+      // Eén gedeelde gereedheidstoets met de service, zodat preflight niet
+      // groen kan zijn terwijl een team stil stuk start. Tot 03-11-2026 vroeg
+      // deze probe "staat de marker ergens op het scherm", en dat was waar
+      // terwijl codex modaal in zijn hooks-dialoog stond.
+      const state = readyScreenState(screen, agent.readyMarker)
+      if (state.state === 'blocked') return result('blocked', `${state.dialog}\n${lastLines(state.tail)}`)
+      if (held(state.state === 'ready')) return result('ok')
+      if (state.state === 'gate') {
         const now = Date.now()
-        if (gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
-          await confirmLiveGate(gate, async (keys, options) => {
+        if (state.gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
+          await confirmLiveGate(state.gate, async (keys, options) => {
             if (options?.enter) await tmux(socket, 'send-keys', '-t', session, keys, 'Enter')
             else await tmux(socket, 'send-keys', '-t', session, keys)
           })
-          gates.push(gate.name)
-          lastGateName = gate.name
+          gates.push(state.gate.name)
+          lastGateName = state.gate.name
           lastGateHandledAt = now
         }
-      } else if (screen.includes(agent.readyMarker)) return result('ok')
+      }
       await new Promise(resolve => setTimeout(resolve, pollMs))
     }
     return result('no-ready-marker', lastLines(screen))

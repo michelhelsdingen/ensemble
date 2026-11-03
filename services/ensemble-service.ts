@@ -20,6 +20,7 @@ import {
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
 import { confirmLiveGate, detectLiveGate, isShellCommand } from '../lib/startup-gates'
+import { createReadyHold, READY_STABLE_MS, readyScreenState } from '../lib/ready-screen'
 import { resolveAgentProgram, resolveAgentProgramDetailed, availableAgentKeys } from '../lib/agent-config'
 import { exportObservation, checkMemoryEndpoint, type MemoryExportResult } from '../lib/memory-export'
 import { AgentWatchdog } from '../lib/agent-watchdog'
@@ -52,6 +53,7 @@ const IDLE_CHECK_INTERVAL_MS = 15_000
 // How long a freshly typed start command may leave the shell in the foreground
 // before the agent counts as not started (a wrapper script execs quickly).
 const AGENT_START_GRACE_MS = 5_000
+const READY_POLL_MS = 500
 const COMPLETION_GRACE_MS = 60_000
 const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // How long a team must be silent before completion WORDING may end it.
@@ -751,22 +753,45 @@ export function buildPromptPreview(params: {
   ].join(' ')
 }
 
-async function waitForReady(
+/** Why an agent is not ready, when the reason is worth telling the user. */
+export interface ReadyOutcome {
+  ready: boolean
+  /** Heading of a dialog the agent cannot answer for itself. */
+  blocked?: string
+  /** The screen under that dialog, for the message in the feed. */
+  tail?: string
+}
+
+/**
+ * Wait until a pane is really ready to receive a prompt.
+ *
+ * Three things changed on 03-11-2026, all measured on this machine:
+ * - Readiness now comes from readyScreenState, which ignores the scrollback.
+ *   The old test ("is the marker anywhere in the capture") was true half a
+ *   second after launch for every agent whose marker is the zsh prompt.
+ * - Readiness must hold for READY_STABLE_MS. codex is genuinely ready at 1,0s
+ *   and modal at 1,6s, so a single reading is not evidence.
+ * - An unknown dialog stops the wait instead of running it down. The user
+ *   decides on a trust dialog; we never answer one on their behalf, and we
+ *   never paste a prompt into one.
+ */
+async function probeReady(
   sessionName: string, program: string, hostId?: string, maxWait = 60000,
-): Promise<boolean> {
+): Promise<ReadyOutcome> {
   const runtime = getRuntime()
   const start = Date.now()
   const agentConfig = resolveAgentProgram(program)
   const readyMarker = agentConfig.readyMarker
   let lastGateName = ''
   let lastGateHandledAt = 0
+  const held = createReadyHold(READY_STABLE_MS)
   while (Date.now() - start < maxWait) {
     try {
       if (hostId && !isSelf(hostId)) {
         const host = getHostById(hostId)
         if (host && await isRemoteSessionReady(host.url, sessionName)) {
           console.log(`[Ensemble] ${sessionName} is remotely reachable (${Math.round((Date.now() - start) / 1000)}s)`)
-          return true
+          return { ready: true }
         }
       } else {
         // A shell in the foreground means the agent CLI is not (or no
@@ -778,34 +803,47 @@ async function waitForReady(
         if (isShellCommand(foreground)) {
           if (Date.now() - start >= AGENT_START_GRACE_MS) {
             console.error(`[Ensemble] ${sessionName}: agent CLI is not running (${foreground} in foreground)`)
-            return false
+            return { ready: false }
           }
-          await new Promise(r => setTimeout(r, 1000))
+          held(false)
+          await new Promise(r => setTimeout(r, READY_POLL_MS))
           continue
         }
         const output = await runtime.capturePane(sessionName, 50)
-        const gate = detectLiveGate(output)
-        if (gate) {
+        const screen = readyScreenState(output, readyMarker)
+        if (screen.state === 'blocked') {
+          console.error(`[Ensemble] ${sessionName} is waiting on a dialog nobody may answer for the user: ${screen.dialog}`)
+          return { ready: false, blocked: screen.dialog, tail: screen.tail }
+        }
+        if (screen.state === 'gate') {
+          held(false)
           const now = Date.now()
-          if (gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
-            await confirmLiveGate(gate, (keys, options) => runtime.sendKeys(sessionName, keys, options))
-            lastGateName = gate.name
+          if (screen.gate.name !== lastGateName || now - lastGateHandledAt >= 3000) {
+            await confirmLiveGate(screen.gate, (keys, options) => runtime.sendKeys(sessionName, keys, options))
+            lastGateName = screen.gate.name
             lastGateHandledAt = now
-            console.log(`[Ensemble] Auto-confirmed ${gate.name} in ${sessionName}`)
+            console.log(`[Ensemble] Auto-confirmed ${screen.gate.name} in ${sessionName}`)
           }
-          await new Promise(r => setTimeout(r, 1000))
+          await new Promise(r => setTimeout(r, READY_POLL_MS))
           continue
         }
-        if (output.includes(readyMarker)) {
+        if (held(screen.state === 'ready')) {
           console.log(`[Ensemble] ${sessionName} is ready (${Math.round((Date.now() - start) / 1000)}s)`)
-          return true
+          return { ready: true }
         }
       }
-    } catch { /* not ready yet */ }
-    await new Promise(r => setTimeout(r, 1000))
+    } catch { held(false) }
+    await new Promise(r => setTimeout(r, READY_POLL_MS))
   }
   console.error(`[Ensemble] ${sessionName} did not become ready within ${maxWait / 1000}s`)
-  return false
+  return { ready: false }
+}
+
+/** Boolean form, for callers that only need to know whether to continue. */
+async function waitForReady(
+  sessionName: string, program: string, hostId?: string, maxWait = 60000,
+): Promise<boolean> {
+  return (await probeReady(sessionName, program, hostId, maxWait)).ready
 }
 
 
@@ -1000,13 +1038,30 @@ export async function createEnsembleTeam(
     const readyResults = await Promise.all(
       activeAgents.map(agent => {
         const sessionName = `${team.name}-${agent.name}`
-        return waitForReady(sessionName, agent.program, agent.hostId).then(ready => ({ agent, sessionName, ready }))
+        return probeReady(sessionName, agent.program, agent.hostId)
+          .then(outcome => ({ agent, sessionName, ...outcome }))
       })
     )
 
     const ready = readyResults.filter(r => r.ready)
     for (const { agent } of ready) teamEvent(team, 'agent_ready', { agent: agent.name })
-    const notReady = readyResults.filter(r => !r.ready)
+    // An agent stuck on a dialog only the user may answer is not a candidate
+    // for best-effort injection: the dialog swallows the paste without a trace,
+    // which is exactly how a team used to start with nobody saying anything.
+    const blocked = readyResults.filter(r => !r.ready && r.blocked)
+    const notReady = readyResults.filter(r => !r.ready && !r.blocked)
+
+    for (const b of blocked) {
+      console.error(`[Ensemble] ${b.sessionName} blocked by dialog: ${b.blocked}`)
+      b.agent.status = 'failed'
+      markAgentFailed(team.id, b.agent.name)
+      teamEvent(team, 'agent_failed', { agent: b.agent.name, detail: `blocked by dialog: ${b.blocked}` })
+      appendMessage(team.id, {
+        id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+        content: `❌ ${b.agent.name} is waiting on a dialog that only you may answer: "${b.blocked}". No prompt was delivered. Start ${b.agent.program} once in a terminal, answer it, then launch again.`,
+        type: 'chat', timestamp: new Date().toISOString(),
+      })
+    }
 
     // Best-effort readiness — Codex CLI in particular often misses the readyMarker
     // while being functionally ready. Don't abort; warn and proceed with prompt
@@ -1021,8 +1076,8 @@ export async function createEnsembleTeam(
       })
     }
 
-    // Use all agents for injection. Only abort if literally zero agents have a session.
-    const injectTargets = readyResults
+    // Only agents whose pane can actually take a paste. Abort when none can.
+    const injectTargets = readyResults.filter(r => !r.blocked)
     if (injectTargets.length === 0) {
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
