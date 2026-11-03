@@ -36,6 +36,8 @@ ES="__ENSEMBLE_DIR__/scripts"
 | `collab-replay.sh` | Replay a finished session in the terminal |
 | `collab-livefeed.sh` | Live colored feed (non-tmux) |
 | `collab-cleanup.sh` | Remove old finished runtime dirs (dry-run by default) |
+| `collab-orphans.sh` | Stop tmux sessions of teams that are over (dry-run by default) |
+| `collab-smoke.sh` | Start a real team, exchange a message, break it down; `--runs N` |
 | `open-herdr-monitor.sh` | Open the monitor in a herdr pane, called by launch |
 | `collab-preflight.sh` | Auth/DNS/service checks, auto-run by launch |
 | `collab-postcheck.sh` | Agent health check ~30s after spawn, auto-armed by launch |
@@ -99,7 +101,9 @@ falls back to `claude`, so a typo silently spawns a second claude instead of fai
 Only pass this when the user explicitly names agents in the task (for example, "use agy and claude").
 Preflight checks only the CLIs you name here, so a codex quota wall does not block a
 `grok,claude` run. Naming agents explicitly also disables the auto-fallback: a dead agent
-becomes a hard failure instead of a silent swap.
+becomes a hard failure instead of a silent swap. It travels to the team as `agentsExplicit`,
+so a stalling agent is not replaced mid-run either: whoever picks their own line-up does not
+get a different model added behind their back. The feed says so when it happens.
 
 Also settable via `COLLAB_AGENTS`, for a preferred line-up you do not want to retype
 (`export COLLAB_AGENTS="codex,claude,grok"`). Precedence: 3rd argument > `COLLAB_AGENTS` >
@@ -127,11 +131,26 @@ Do not read `/tmp/collab-team-id.txt` unless you have no launch output: it is a 
 global file that a concurrent collab overwrites.
 
 **Check that the launch actually succeeded** before doing Step 2. `collab-launch.sh` can fail
-after the team already exists: exit `3` means a team was created but no message was exchanged
-within the wait window, exit `4` means the bridge or poller died right after starting. Both
-print a `TEAM_ID=` trailer anyway, but neither one printed `Team is live!`. Only tell the user
-the team is live when that exact line is in the output. On exit `3`, run
-`"$ES/collab-rescue.sh" "$TEAM_ID"` before saying anything is running.
+after the team already exists: exit `3` means a team was created but the prompt never reached an
+agent, or nobody spoke within the wait window; exit `4` means the bridge or poller died right
+after starting. Both print a `TEAM_ID=` trailer anyway, but neither one printed `Team is live!`.
+Only tell the user the team is live when that exact line is in the output.
+
+On exit `3`, read the reason first. The launcher waits on the delivery state the service keeps
+per agent, so it says which of the two happened:
+
+- `Prompt niet aangekomen bij: <agent>` means the prompt was never taken. Rescue will not help
+  until the cause is gone; look at that agent's pane (`tmux attach -t <team-name>-<agent>`) and
+  report what is on it.
+- `Niet alle agents hebben binnen Ns een bericht gestuurd` means delivery worked and the agent
+  stayed quiet. Then run `"$ES/collab-rescue.sh" "$TEAM_ID"` before saying anything is running.
+
+**Exit `9` is not a fault to retry.** An agent CLI is sitting on a startup dialog that only the
+user may answer, and the message names the CLI and the dialog. Never answer such a dialog for
+them and never relaunch with `COLLAB_SKIP_STARTPROBE=1`: trusting code that may run outside the
+sandbox is their decision. Tell them, in their language, which CLI it is and that they should
+start it once in a normal terminal, answer the question, and then launch again. Offer to start
+the team without that agent if the task allows it.
 
 ### Step 1b: Health checks (automatic, do not re-run)
 
@@ -140,8 +159,14 @@ the team is live when that exact line is in the output. On exit `3`, run
   printed. Do not paper over it with `COLLAB_SKIP_PREFLIGHT=1` unless the user asks.
   Exit codes: `1` service down, `2` service started in an unauthenticated shell (restart it),
   `3` claude CLI broken, `4` codex CLI broken, `5` DNS/network, `6` grok CLI broken,
-  `7` health hook reports an unavailable requested agent or no healthy fallback.
-  Exit `7` is also returned by the launcher; its message lists healthy alternatives.
+  `7` health hook reports an unavailable requested agent or no healthy fallback,
+  `8` the service cannot spawn agents (deleted binary or unreadable repo),
+  `9` an agent CLI waits on a startup dialog only the user may answer.
+  Exit `7` and `9` are also returned by the launcher unchanged. `7` lists healthy alternatives;
+  for `9` see above.
+  Preflight also starts every requested agent once in a throwaway tmux session, which is how it
+  finds a dialog that `codex exec` and `claude auth status` cannot see, and it restarts a
+  service that is older than the service code on disk.
 - **Postcheck** is armed automatically and fires ~25s after spawn. It only ever looks at this
   team's own tmux sessions. If an agent is stuck in an error state, or zero messages were
   exchanged in its wait window, it kills the team and writes the diagnosis to
@@ -290,4 +315,5 @@ Path and branch appear in the summary and finish event. Replacement checks local
 sessions every 20 seconds and preserves role, directory, task, and bounded recent
 context. It selects an unused `fallbackOrder` key with status `ok`, using roster,
 then health, then no check. Remote replacements remain on the original host. MiMo (`mimo`) is
-available as an explicit agent key.
+available as an explicit agent key. Replacement never runs on a team whose agents were named
+explicitly.

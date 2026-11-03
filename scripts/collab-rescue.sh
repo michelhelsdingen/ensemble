@@ -28,6 +28,7 @@ if [ -z "$TEAM_ID" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=collab-paths.sh
 . "$SCRIPT_DIR/collab-paths.sh"
 RD="$(collab_runtime_dir "$TEAM_ID")"
@@ -102,6 +103,25 @@ deliver_to_session() {
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "  $AGENT_NAME: tmux sessie '$SESSION' bestaat niet" >&2
     return 1
+  fi
+
+  # Kijken voor we plakken. Tot 03-11-2026 plakte rescue blind: codex stond
+  # modaal in zijn hooks-dialoog en drie pogingen op rij verdwenen daarin,
+  # zonder dat iemand kon zien waarom. Dezelfde toets als de service gebruikt.
+  if [ -x "$REPO_DIR/node_modules/.bin/tsx" ]; then
+    PANE_DIALOOG=$("$REPO_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/pane-ready.ts" "$SESSION" "$AGENT_NAME" 2>/dev/null)
+    PANE_STAAT=$?
+    case "$PANE_STAAT" in
+      10)
+        echo "  $AGENT_NAME: wacht op een dialoog die alleen jij mag beantwoorden: \"${PANE_DIALOOG}\"" >&2
+        echo "    Opnieuw afleveren helpt hier niet. Start die CLI eenmalig in een gewone terminal en beantwoord de vraag." >&2
+        return 1
+        ;;
+      11)
+        echo "  $AGENT_NAME: pane is nog niet gereed voor invoer; even wachten en opnieuw proberen" >&2
+        return 1
+        ;;
+    esac
   fi
 
   local BUFNAME="rescue-${AGENT_NAME}-$$"
