@@ -109,6 +109,43 @@ describe('readyScreenState', () => {
     expect(readyScreenState(pane, '❯').state).toBe('ready')
   })
 
+  it('bevestigt geen bekende dialoog die boven een levend onbekend menu staat', () => {
+    // Zonder deze regel pakt detectLiveGate de trust-tekst uit de scrollback,
+    // antwoordt met Enter in het hooks-menu dat eronder leeft, en omzeilt zo
+    // precies het besluit dat de gebruiker zelf moet nemen.
+    const pane = [
+      ' nocorrect unset CLAUDECODE; codex --cd /tmp/w',
+      ' Do you trust the contents of this directory?',
+      ' › 1. Yes, continue',
+      '   2. No, quit',
+      '',
+      '  Hooks need review',
+      '  6 hooks are new or changed.',
+      '',
+      '› 1. Review hooks',
+      '  2. Trust all and continue',
+      '',
+      '  enter confirm · esc skip',
+    ].join('\n')
+    const staat = readyScreenState(pane, '›')
+    if (staat.state !== 'blocked') throw new Error(`verwachtte blocked, kreeg ${staat.state}`)
+    expect(staat.dialog).toContain('Hooks need review')
+  })
+
+  it('blijft gereed afwijzen zolang een dialoog nog op een toets wacht', () => {
+    // De marker staat hier onder de laatste menuregel, maar de voetregel zegt
+    // dat de dialoog nog leeft. Dat is geen afgehandelde dialoog.
+    const pane = [
+      ' nocorrect unset CLAUDECODE; codex --cd /tmp/w',
+      '  Nieuwe voorwaarden',
+      '> 1. Akkoord',
+      '  2. Niet akkoord',
+      '  > ',
+      '  enter confirm · esc skip',
+    ].join('\n')
+    expect(readyScreenState(pane, '>').state).toBe('blocked')
+  })
+
   it('wacht nog bij een lege pane', () => {
     expect(readyScreenState('', '❯').state).toBe('waiting')
     expect(readyScreenState('\n\n  \n', '❯').state).toBe('waiting')

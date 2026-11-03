@@ -44,15 +44,35 @@ const LIVE_TAIL_LINES = 15
 /** A menu line of an open dialog, e.g. '› 1. Review hooks' or '❯ No, exit'. */
 const MENU_LINE = /^[\s│]*[❯›>●○]\s*(\d+[.)]\s*\S|(Yes|No|Review|Trust|Continue|Accept|Cancel|Quit|Exit)\b)/
 
+/** The selected line of a menu: '❯', '›', '>' or a filled '●', never a hollow '○'. */
+const SELECTED_LINE = /^[\s│]*[❯›>●]\s*(\d+[.)]\s*)?(?<option>.*)$/
+
+/** The options a known startup dialog offers. Anything else is another dialog. */
+const KNOWN_OPTION = /^(Yes|No)\b/i
+
 /** The footer a dialog prints to say it is waiting for a key. */
 const CONFIRM_FOOTER = /\b(enter (to )?confirm|press enter to continue|esc (to )?(skip|cancel)|enter to select)\b/i
 
-/** The first line of the dialog: its heading, for the error message. */
-function dialogHeading(tail: string[]): string {
-  const firstMenu = tail.findIndex(line => MENU_LINE.test(line))
-  const above = (firstMenu === -1 ? tail : tail.slice(0, firstMenu))
-    .map(line => line.trim())
-    .filter(line => line && !/^[─━=_.·]+$/.test(line))
+/** An option line without the selection mark, e.g. '  2. Trust all'. */
+const OPTION_LINE = /^[\s│]*\d+[.)]\s*\S/
+
+/** Decoration, not text: a rule, a border. */
+const DECORATION = /^[─━=_.·│\s]*$/
+
+/**
+ * The heading of the dialog that is live now.
+ *
+ * Walk up from its last menu line over its own description lines and stop at
+ * the previous menu: an answered dialog higher in the pane must not lend its
+ * title to the one in front of the user.
+ */
+function dialogHeading(tail: string[], lastMenuLine: number): string {
+  const above: string[] = []
+  for (let i = (lastMenuLine < 0 ? tail.length : lastMenuLine) - 1; i >= 0; i--) {
+    const line = tail[i]
+    if (MENU_LINE.test(line) || OPTION_LINE.test(line)) break
+    if (!DECORATION.test(line)) above.unshift(line.trim())
+  }
   return above[0] ?? tail.map(line => line.trim()).find(Boolean) ?? 'unknown dialog'
 }
 
@@ -75,22 +95,35 @@ export function readyScreenState(pane: string, readyMarker: string): ReadyScreen
   const tail = live.slice(-LIVE_TAIL_LINES)
   const tailText = tail.join('\n')
 
-  // An answered dialog stays in the pane. The marker strictly below its last
-  // menu line means the CLI moved on; a marker inside the menu (codex draws
-  // '› 1. Review hooks') does not count, which is the whole point.
   let lastMenuLine = -1
   tail.forEach((line, index) => { if (MENU_LINE.test(line)) lastMenuLine = index })
-  if (lastMenuLine >= 0 && tail.slice(lastMenuLine + 1).join('\n').includes(readyMarker)) {
+  const belowMenu = tail.slice(lastMenuLine + 1).join('\n')
+
+  // An answered dialog stays in the pane. The marker strictly below its last
+  // menu line means the CLI moved on; a marker inside the menu (codex draws
+  // '› 1. Review hooks') does not count, which is the whole point. A confirm
+  // footer under the menu means the dialog is still waiting for a key, so the
+  // marker below it is part of the dialog, not an input line.
+  if (lastMenuLine >= 0 && belowMenu.includes(readyMarker) && !CONFIRM_FOOTER.test(belowMenu)) {
     return { state: 'ready' }
   }
 
-  // A dialog we already know beats everything: its menu arrow may be the marker.
+  // A dialog we know how to answer, but only if the live menu really is that
+  // dialog. detectLiveGate reads text, and the text of an answered trust
+  // dialog stays in the pane: without the check below, a trust prompt in the
+  // scrollback made us press Enter inside the hooks dialog living under it,
+  // which is exactly the decision nobody may take for the user.
   const gate = detectLiveGate(tailText)
-  if (gate) return { state: 'gate', gate }
+  const selected = lastMenuLine >= 0
+    ? tail.slice(0, lastMenuLine + 1).reverse().find(line => SELECTED_LINE.test(line))
+    : undefined
+  const selectedOption = selected?.match(SELECTED_LINE)?.groups?.option?.trim() ?? ''
+  const menuIsKnownDialog = lastMenuLine < 0 || KNOWN_OPTION.test(selectedOption)
+  if (gate && menuIsKnownDialog) return { state: 'gate', gate }
 
   // An unknown dialog, recognised by its menu or by the key it waits for.
   if (lastMenuLine >= 0 || CONFIRM_FOOTER.test(tailText)) {
-    return { state: 'blocked', dialog: dialogHeading(tail), tail: tailText }
+    return { state: 'blocked', dialog: dialogHeading(tail, lastMenuLine), tail: tailText }
   }
 
   return tailText.includes(readyMarker) ? { state: 'ready' } : { state: 'waiting' }

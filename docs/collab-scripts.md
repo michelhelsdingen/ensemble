@@ -89,6 +89,7 @@ instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as the reco
 |---|---|
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
+| 9 | Preflight found an agent waiting on a startup dialog (passed through) |
 | 3 | Team created but no message exchanged within the wait window |
 | 4 | Bridge or poller process died immediately after starting |
 
@@ -115,6 +116,15 @@ auth mode that rejects the configured model answers with an ordinary error conta
 wording, and used to be reported as healthy right before the agent spawned and sat silent all
 session.
 
+Before those checks, preflight starts every requested agent in a throwaway tmux session exactly
+as a team does, and refuses to launch (exit 9) when one of them is sitting on a dialog. The
+`codex exec` check above cannot see this: `exec` has no TUI. Measured 03-11-2026, codex 0.164.0
+opened a modal "Hooks need review" whose selection arrow is its own readyMarker, so preflight
+was green, the team launched, the prompt was pasted into the dialog three times and nobody said
+anything. The dialog is never answered for you: trusting code that may run outside the sandbox
+is your decision. Start that CLI once in a terminal, answer it, launch again. Skip the probe
+with `COLLAB_SKIP_STARTPROBE=1`; it costs no tokens, only a few seconds of startup.
+
 If the tmux DNS resolver is stale, preflight auto-fixes it with `tmux kill-server`, but refuses
 to do that while any `collab-*` tmux session is running: that kill would take a working team
 down with it. Finish or disband those teams first, or run `tmux kill-server` yourself once
@@ -140,6 +150,7 @@ active, because team state lives in the service's memory: disband that team firs
 | 6 | Grok CLI broken |
 | 7 | Health hook reports a selected agent down or limited, with no permitted healthy fallback |
 | 8 | Service runtime cannot spawn agents: it runs a deleted binary or cannot read the repo |
+| 9 | An agent CLI is waiting on a startup dialog only the user may answer |
 
 ---
 

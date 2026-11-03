@@ -143,7 +143,12 @@ if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
     PREFLIGHT_EXIT=${PIPESTATUS[0]}
     echo -e "\n  ${R}\033[91m✗${R} Preflight FAILED — fix above issues then re-run."
     echo -e "  ${D}(bypass with COLLAB_SKIP_PREFLIGHT=1, but agents will likely fail)${R}"
-    if [ "$PREFLIGHT_EXIT" = "7" ]; then exit 7; fi
+    # 7 (geen gezonde fallback) en 9 (een agent wacht op een startdialoog)
+    # vragen om een andere actie dan "probeer opnieuw", dus die codes gaan
+    # ongewijzigd naar de aanroeper.
+    case "$PREFLIGHT_EXIT" in
+      7|9) exit "$PREFLIGHT_EXIT" ;;
+    esac
     exit 1
   fi
 fi

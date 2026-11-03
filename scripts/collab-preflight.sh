@@ -113,6 +113,57 @@ if [ -n "$HEALTH_AGENTS" ]; then
   REQUESTED_LC="$HEALTH_AGENTS"
 fi
 
+# ─── 0. Startdialoog: wacht een agent-CLI op een toets? ───
+# De codex-probe verderop gebruikt `codex exec`, en dat pad ziet geen
+# interactieve dialoog. Gemeten op 03-11-2026: codex 0.164.0 stond modaal in
+# "Hooks need review" terwijl deze preflight volledig groen was. De launcher
+# startte het team, de prompt werd in de dialoog geplakt en niemand zei iets.
+# Deze probe start elke gevraagde agent zoals een team dat doet en stopt met
+# code 9 als er een dialoog voor staat. Bewust niet wegklikken: een
+# vertrouwensvraag over code die buiten de sandbox mag draaien is een besluit
+# van de gebruiker.
+# Kost geen tokens: er wordt alleen opgestart, nooit een prompt gestuurd.
+if [ "${COLLAB_SKIP_STARTPROBE:-0}" = "1" ]; then
+  ok "Startdialoog-probe overgeslagen (COLLAB_SKIP_STARTPROBE=1)"
+elif ! command -v tmux > /dev/null 2>&1; then
+  warn "Startdialoog-probe overgeslagen: tmux niet gevonden"
+else
+  STARTPROBE_CMD="${COLLAB_STARTPROBE_CMD:-}"
+  if [ -z "$STARTPROBE_CMD" ]; then
+    if command -v node > /dev/null 2>&1 && [ -f "$SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs" ]; then
+      STARTPROBE_CMD="NODE_NO_WARNINGS=1 node --import $SCRIPT_DIR/../node_modules/tsx/dist/loader.mjs $SCRIPT_DIR/agent-smoketest.ts"
+    fi
+  fi
+  if [ -z "$STARTPROBE_CMD" ]; then
+    warn "Startdialoog-probe overgeslagen: node of tsx niet beschikbaar"
+  else
+    STARTPROBE_KEYS=$(printf '%s' "$REQUESTED_LC" | tr ',' ' ')
+    STARTPROBE_OUT=$(eval "$STARTPROBE_CMD $STARTPROBE_KEYS --timeout ${COLLAB_STARTPROBE_TIMEOUT:-25}" 2>/dev/null) || true
+    # Alleen 'blocked' is een blokkade. Een trage of ontbrekende agent wordt
+    # verderop al afgehandeld; die mag hier geen team tegenhouden.
+    STARTPROBE_BLOCKED=$(printf '%s' "$STARTPROBE_OUT" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
+for key, res in data.items():
+    if isinstance(res, dict) and res.get('status') == 'blocked':
+        detail = ' '.join(str(res.get('detail', '')).split())[:220]
+        print(f'{key}: {detail}')
+" 2>/dev/null || echo "")
+    if [ -n "$STARTPROBE_BLOCKED" ]; then
+      fail 9 "Een agent wacht op een dialoog die alleen jij mag beantwoorden:
+$(printf '%s\n' "$STARTPROBE_BLOCKED" | sed 's/^/     /')
+     Start die CLI eenmalig in een gewone terminal, beantwoord de vraag, en
+     start het team daarna opnieuw. Wegklikken doen we niet voor je."
+    fi
+    ok "Geen startdialoog in de weg (${REQUESTED_AGENTS})"
+  fi
+fi
+
 # ─── 1. Ensemble service ───
 if ! curl -sf "$API/api/v1/health" > /dev/null 2>&1; then
   fail 1 "Ensemble service NOT running on $API
