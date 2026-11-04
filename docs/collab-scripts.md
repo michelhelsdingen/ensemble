@@ -95,6 +95,14 @@ warns instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as th
 | 7 | Preflight found no healthy agent, no usable replacement, or a name that is not an agent (passed through) |
 | 9 | Preflight found an agent waiting on a startup dialog (passed through) |
 
+**Do not override `COLLAB_RUNTIME_ROOT` for the service.** Agents call `team-say.sh` from inside
+their tmux pane, and that script derives the messages file from `COLLAB_RUNTIME_ROOT` in the pane's
+own environment. The tmux server keeps its own environment, so a pane never inherits the variable
+from the service process: set it for the service and you get a team that starts, works, and never
+speaks, because its messages land in a file the bridge is not reading. Found 04-11-2026 while
+building an isolated second service. For isolation use `ENSEMBLE_PORT` and `ENSEMBLE_DATA_DIR`
+instead (own port, own register); team ids are unique, so the runtime files never collide.
+
 **A failure always says why.** Measured 04-11-2026: `/collab` with the typo `grk` printed
 "All preflight checks passed" and then exited 22 after 1.8 seconds with nothing else on screen.
 Two causes, both fixed. Preflight now checks the names against `agents.json` before any probe and
