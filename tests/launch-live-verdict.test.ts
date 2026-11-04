@@ -131,19 +131,27 @@ describe('collab-launch oordeelt over een verse start', () => {
 })
 
 /**
- * Exit 4 (de bridge of de poller stopt direct) liet het al aangemaakte team
- * volledig achter: actief in het register, met draaiende tmux-sessies. Gevonden
- * door het reviewteam van 03-11-2026 (team 40d536c0).
+ * Stopt de bridge direct, dan staat er een team dat werkt maar waarvan geen
+ * bericht bij de API aankomt. Op 03-11-2026 liet ik de launcher dat team zelf
+ * opheffen; een uur later gooide diezelfde opruiming een werkend team weg omdat
+ * de poller even niet opkwam. Sinds 04-11-2026 geldt: de launcher meldt het,
+ * noemt de twee opdrachten (bridge opnieuw starten, of opheffen) en raakt het
+ * team niet aan. Alleen de gebruiker heft een team op.
  */
-describe('collab-launch ruimt op als hij halverwege stopt', () => {
-  it('heft het team op als de bridge meteen stopt', () => {
+describe('collab-launch raakt het team niet aan als hij halverwege stopt', () => {
+  it('meldt een gestopte bridge, maar laat het team staan', () => {
     const run = launch(team([['codex-1', 'delivered'], ['glm-2', 'delivered']], []), true)
     expect(run.status).toBe(4)
     const aanroepen = fs.existsSync(path.join(root, 'curl-aanroepen.log'))
       ? fs.readFileSync(path.join(root, 'curl-aanroepen.log'), 'utf8')
       : ''
-    expect(aanroepen).toMatch(new RegExp(`teams/${TEAM}/disband`))
-    expect(run.out).toMatch(/opgeheven|opgeruimd/i)
+    expect(aanroepen).not.toMatch(new RegExp(`teams/${TEAM}/disband`))
+    // De tmux-sessies van het team blijven ook staan.
+    expect(run.out).not.toMatch(/opgeheven|opgeruimd/i)
+    // En de uitvoer vertelt wat je kunt doen, met de team-id erin.
+    expect(run.out).toContain(TEAM)
+    expect(run.out).toMatch(/ensemble-bridge\.sh/)
+    expect(run.out).toMatch(/disband/)
   }, 30_000)
 })
 

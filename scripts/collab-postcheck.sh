@@ -159,22 +159,17 @@ done <<< "$SESSIONS_WITHOUT_PROMPT"
 if [ "$ERRORS_FOUND" -gt 0 ]; then
   echo -e "${RED}✗ Postcheck FAILED — $ERRORS_FOUND agent(s) in error state${R}" >&2
   echo -e "$ERROR_LOG" >&2
-  echo -e "\n${YEL}Disbanding team $TEAM_ID...${R}" >&2
-  # Eerst via de service, dan pas zelf. Een kale tmux-kill laat het team "active"
-  # in het register staan, schrijft geen samenvatting en ruimt de worktrees en de
-  # monitor-pane niet op; disband doet dat allemaal. Lukt de API niet, dan killen
-  # we alsnog zelf, want een kapot team moet weg.
-  if curl -sf -X POST "$API/api/ensemble/teams/$TEAM_ID/disband" > /dev/null 2>&1; then
-    echo -e "  ${YEL}!${R} Team opgeheven via de service" >&2
-  else
-    echo -e "  ${YEL}!${R} Service onbereikbaar, sessies zelf gestopt" >&2
-  fi
-  for s in $SESSIONS; do tmux kill-session -t "$s" 2>/dev/null || true; done
-  [ -f "$RD/bridge.pid" ] && kill "$(cat $RD/bridge.pid)" 2>/dev/null || true
-  [ -f "$RD/poller.pid" ] && kill "$(cat $RD/poller.pid)" 2>/dev/null || true
-  echo -e "${YEL}Suggested fix:${R}" >&2
-  echo "  pkill -f 'tsx server.ts' && cd ~/Documents/ensemble && nohup ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &" >&2
-  echo "  Then re-run /collab" >&2
+  # Het team blijft staan. Tot 04-11-2026 hief de postcheck het hier zelf op,
+  # en op 03-11 bleek waarom dat verkeerd is: hij grept het zichtbare scherm af,
+  # en de geplakte taaktekst staat daar ook. Een collab OVER een inlogfout maakte
+  # zo dertig seconden na een geslaagde start zijn eigen team dood. Zo'n melding
+  # kan zich vergissen; een opruiming die zich vergist kost het werk van het team.
+  # Dus: melden, de opdrachten erbij, en jij beslist.
+  echo -e "\n${YEL}Het team blijft staan; alleen jij heft een team op.${R}" >&2
+  echo "  Kijken:   tmux attach -t <sessie>" >&2
+  echo "  Opheffen: curl -s -X POST $API/api/ensemble/teams/$TEAM_ID/disband" >&2
+  echo -e "${YEL}Lijkt de service zelf stuk:${R}" >&2
+  echo "  launchctl kickstart -k gui/\$(id -u) dev.ensemble.server" >&2
   exit 2
 fi
 

@@ -90,9 +90,17 @@ warns instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as th
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
 | 3 | Team created but the prompt never reached an agent |
-| 4 | Bridge or poller died right after starting; the team is disbanded before exit |
+| 4 | Bridge died right after starting; the team keeps running and is left alone (see below) |
 | 7 | Preflight found no healthy agent and no usable replacement (passed through) |
 | 9 | Preflight found an agent waiting on a startup dialog (passed through) |
+
+**No script here ever ends a team.** Only you do, from the monitor (`d`) or with
+`POST /api/ensemble/teams/<id>/disband`. Fixed 04-11-2026, after three different safety nets each
+took down a working team in one evening: postcheck over the task text in its own pane, the exit-4
+cleanup over a poller that was slow to come up, and the older tmux scan over a fault in a
+different team. A false report costs a line of explanation; a false cleanup costs the team's work.
+The one automatic end that remains is the normal one, in the service: every agent sent
+`<<COLLAB_DONE>>`, or the team hit its runtime limit. That path writes a summary first.
 
 The launcher waits on evidence instead of on the clock. The service records per agent how far
 its prompt got (`pending`, `delivered`, `confirmed`, `silent`, `failed`), where `confirmed` means
@@ -205,8 +213,8 @@ that register (an older team, or one that failed before a single agent spawned) 
 nothing to check and exits `0` without touching anything.
 
 After the wait, it captures each of those panes and greps for known fatal patterns ("Not logged
-in", a DNS/network failure, an auth error). If it finds one it kills only this team's sessions and
-prints the diagnosis.
+in", a DNS/network failure, an auth error). If it finds one it prints the diagnosis and the two
+commands you may want (attach, or disband), and leaves the team alone.
 
 For silence it asks the service, not the clock: the same per-agent delivery state the launcher
 uses. `delivered`/`silent` means the pane took the prompt, so postcheck says so and exits 0,
@@ -219,7 +227,7 @@ was working, and posted its conclusion two minutes later.
 |---|---|
 | 0 | Agents healthy, prompt delivered, or nothing to check (no register, or an empty one) |
 | 1 | Team-id not found |
-| 2 | An agent is in a fatal error state (team is killed), or a delivery really failed |
+| 2 | An agent is in a fatal error state, or a delivery really failed (the team is left running) |
 
 ---
 

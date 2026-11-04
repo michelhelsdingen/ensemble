@@ -1,5 +1,15 @@
 /**
- * De postcheck mag alleen de sessies van zijn eigen team killen.
+ * De postcheck ruimt niets op. Hij meldt, en jij beslist.
+ *
+ * Vastgelegd 04-11-2026: geen enkel script in de collab-gereedschapskist heft
+ * nog zelf een team op. Drie keer op een avond legde een vangnet een werkend
+ * team om: de postcheck om de eigen taaktekst in de pane, de exit-4-opruiming
+ * van de launcher om een poller-hik, en de oude tmux-scan hieronder om een
+ * fout in een ander team. Een onterechte melding kost een regel uitleg, een
+ * onterechte opruiming kost het werk van het team.
+ *
+ * De oude regel luidde: de postcheck mag alleen de sessies van zijn eigen team
+ * killen.
  *
  * Tot 20-09-2026 haalde hij met `tmux ls` elke sessie op die op een collab-naam
  * leek, en kilde bij een gevonden fout die hele lijst. Draaiden er twee teams
@@ -88,7 +98,7 @@ function gekildeSessies(): string[] {
 }
 
 describe('postcheck scope', () => {
-  it('kilt alleen de sessies uit het eigen register, niet die van een ander team', () => {
+  it('kilt niets, ook niet de sessies uit zijn eigen register', () => {
     const dir = path.join(root, 'mijn-team')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'sessions'), 'collab-1758-4412-claude-1\n')
@@ -96,8 +106,7 @@ describe('postcheck scope', () => {
 
     draaiPostcheck('mijn-team')
 
-    expect(gekildeSessies()).toEqual(['collab-1758-4412-claude-1'])
-    expect(gekildeSessies()).not.toContain('collab-9931-7720-codex-1')
+    expect(gekildeSessies()).toEqual([])
   })
 
   it('kilt niets als er geen register is, en valt niet terug op een tmux-scan', () => {
@@ -218,31 +227,36 @@ describe('postcheck en de prompttekst in de pane', () => {
     expect(uit).not.toMatch(/NOT LOGGED IN/)
   })
 
-  it('kilt wel bij een foutregel die niet uit de prompt komt', () => {
+  it('meldt wel een foutregel die niet uit de prompt komt, en laat het team staan', () => {
     zetTeamKlaar('team-echtefout', 'Maak de tests groen.')
     const uit = draaiPostcheck('team-echtefout', 'Not logged in\nPlease run /login')
-    expect(gekildeSessies()).toEqual(['team-echtefout-codex-1'])
     expect(uit).toMatch(/NOT LOGGED IN/)
+    expect(gekildeSessies()).toEqual([])
+    // En hij zegt hoe jij het team zelf opheft, met de team-id erin.
+    expect(uit).toMatch(/teams\/team-echtefout\/disband/)
   })
 })
 
 /**
- * Een echte fout hoort via het disband-endpoint te gaan, niet via een kale
- * tmux-kill: anders blijft het team "active" in het register, komt er geen
- * samenvatting, blijven worktrees staan en blijft de monitor-pane open.
- * Aanbeveling van het reviewteam van 03-11-2026, door beide agents onderschreven.
+ * Tot 04-11-2026 hief de postcheck een team met een fout zelf op, eerst via het
+ * disband-endpoint en daarna met een kale tmux-kill. Dat is nu weg: hij raakt
+ * het team niet aan en noemt de opdracht waarmee jij het doet. Een postcheck
+ * die zich vergist (en dat deed hij, om de taaktekst in de pane) mag geen werk
+ * weggooien.
  */
-describe('postcheck ruimt op via de service', () => {
-  it('vraagt disband aan voordat het zelf sessies kilt', () => {
+describe('postcheck heft zelf geen team op', () => {
+  it('vraagt geen disband aan en kilt geen sessies', () => {
     const dir = path.join(root, 'team-disband')
     fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'prompts', 'codex-1.txt'), 'Maak de tests groen.')
     fs.writeFileSync(path.join(dir, 'sessions'), 'team-disband-codex-1\n')
     fs.writeFileSync(path.join(dir, 'messages.jsonl'), '')
-    draaiPostcheck('team-disband', 'Not logged in', JSON.stringify({ team: { agents: [] } }))
+    const uit = draaiPostcheck('team-disband', 'Not logged in', JSON.stringify({ team: { agents: [] } }))
     const aanroepen = fs.existsSync(path.join(bin, 'curl-aanroepen.log'))
       ? fs.readFileSync(path.join(bin, 'curl-aanroepen.log'), 'utf8')
       : ''
-    expect(aanroepen).toMatch(/teams\/team-disband\/disband/)
+    expect(aanroepen).not.toMatch(/-X POST/)
+    expect(gekildeSessies()).toEqual([])
+    expect(uit).toMatch(/blijft staan/)
   })
 })

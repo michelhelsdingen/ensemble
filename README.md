@@ -97,6 +97,8 @@ This installs the skill, configures permissions, and verifies prerequisites. See
 
 The default team is **Codex (lead) + Claude Code (worker)**. This is the tested, production-ready combination.
 
+**What "tested" means here.** The start path is measured live for `codex`, `claude`, `glm` and `grok`: 56 launches on 03-11-2026, timed from the command to the team being live. `agy`, `gemini`, `mimo` and `opencode` have working configuration entries and no measured start at all, so treat them as experimental: the delivery of a prompt depends on each CLI's own screen output, and that is what has never been checked for those four.
+
 | Agent | Status | How to use |
 |---|---|---|
 | **Codex + Claude Code** | Fully tested | Default, just run `/collab` or `collab-launch.sh` |

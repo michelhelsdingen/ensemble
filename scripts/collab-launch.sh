@@ -231,24 +231,18 @@ print_team_id_trailer() {
   echo "TEAM_ID=$TEAM_ID"
 }
 
-# Stop een team dat we zelf niet meer kunnen begeleiden. Tot 03-11-2026 liet een
-# exit 4 (bridge of poller stopt direct) het team volledig achter: actief in het
-# register, met draaiende tmux-sessies. Eerst via de service, want die ruimt ook
-# de worktrees en de monitor op; lukt dat niet, dan zelf de sessies en de
-# hulpprocessen stoppen. Gevonden door het reviewteam van 03-11-2026.
-ruim_team_op() {
-  if curl -sf -X POST "$API/api/ensemble/teams/$TEAM_ID/disband" > /dev/null 2>&1; then
-    echo -e "  ${CHECK} Team opgeheven via de service" >&2
-    return 0
-  fi
-  echo -e "  \033[93m!${R} Service onbereikbaar; sessies en hulpprocessen zelf gestopt" >&2
-  if [ -f "$RUNTIME_DIR/sessions" ]; then
-    while IFS= read -r SESSIE; do
-      [ -n "$SESSIE" ] || continue
-      tmux kill-session -t "$SESSIE" 2>/dev/null || true
-    done < "$RUNTIME_DIR/sessions"
-  fi
-  stop_team_processes "$TEAM_ID" 2>/dev/null || true
+# Het team blijft staan, ook als wij het niet meer kunnen begeleiden.
+#
+# Op 03-11-2026 liet ik een exit 4 het team zelf opheffen, omdat het anders
+# actief in het register bleef staan met draaiende sessies. Een uur later gooide
+# precies die opruiming een werkend team weg, omdat de poller even niet opkwam.
+# Sinds 04-11-2026 geldt de regel: geen script in deze gereedschapskist heft een
+# team op. De agents draaien, hun werk is er nog, en wij melden alleen wat er
+# mis is en wat je kunt doen.
+meld_half_gestart_team() {
+  echo -e "  \033[93m!${R} Het team draait wel; alleen jij heft een team op." >&2
+  echo "    Bridge opnieuw starten: $SCRIPT_DIR/ensemble-bridge.sh $TEAM_ID $API" >&2
+  echo "    Of opheffen:            curl -s -X POST $API/api/ensemble/teams/$TEAM_ID/disband" >&2
 }
 
 MESSAGES_FILE="$(collab_messages_file "$TEAM_ID")"
@@ -295,7 +289,7 @@ if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
   echo -e "  ${CHECK} Bridge started ${D}(pid $BRIDGE_PID)${R}"
 else
   echo -e "  \033[91m✗${R} Bridge stopte direct, zie $BRIDGE_LOG_FILE" >&2
-  ruim_team_op
+  meld_half_gestart_team
   print_team_id_trailer
   exit 4
 fi
