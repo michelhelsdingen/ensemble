@@ -57,13 +57,16 @@ exit 0
 
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
-function team(delivery: Array<[string, string]>, sprekers: string[]) {
+function team(delivery: Array<[string, string]>, sprekers: string[], ensembleRegels: string[] = []) {
   return JSON.stringify({
     team: {
       id: TEAM, name: 'collab-test',
       agents: delivery.map(([name, state]) => ({ name, status: 'active', delivery: state })),
     },
-    messages: sprekers.map(from => ({ from, to: 'team', content: 'hoi', type: 'chat' })),
+    messages: [
+      ...sprekers.map(from => ({ from, to: 'team', content: 'hoi', type: 'chat' })),
+      ...ensembleRegels.map(content => ({ from: 'ensemble', to: 'team', content, type: 'chat' })),
+    ],
   })
 }
 
@@ -131,6 +134,33 @@ describe('collab-launch oordeelt over een verse start', () => {
     expect(run.out).toContain('Prompt niet aangekomen bij: glm-2')
     expect(run.out).toContain('collab-rescue.sh')
     expect(run.status).toBe(3)
+  }, 30_000)
+
+  /**
+   * Bij een echte afleverfout hoort de reden van de service erbij.
+   *
+   * Gemeten 04-11-2026 met een agent waarvan de readyMarker nooit op het scherm
+   * komt (wat er gebeurt als een CLI na een update iets anders print): de start
+   * duurde 90 seconden, gaf exit 3 met "Prompt niet aangekomen" en adviseerde
+   * collab-rescue, en dat herstelpad kan niet werken want rescue toetst dezelfde
+   * marker. De service had de echte reden al in de feed geschreven
+   * ("did not signal ready in time", "pane not ready"), maar die regel haalde
+   * het scherm niet. Hetzelfde patroon als de 400 die de launcher weggooide.
+   */
+  it('drukt de uitleg van de service af bij een afleverfout', () => {
+    const run = launch(team(
+      [['codex-1', 'confirmed'], ['glm-2', 'failed']],
+      ['codex-1'],
+      [
+        '⚠ glm-2 did not signal ready in time — injecting prompt anyway (best-effort)',
+        '❌ Delivery to glm-2 failed: glm-2 did not take the prompt: pane not ready (not-ready)',
+      ],
+    ))
+    expect(run.status).toBe(3)
+    expect(run.out).toContain('pane not ready')
+    expect(run.out).toContain('did not signal ready in time')
+    // En de pane zelf is waar je moet kijken.
+    expect(run.out).toMatch(/tmux attach/)
   }, 30_000)
 
   it('blijft wachten zolang een agent de prompt nog niet aannam', () => {

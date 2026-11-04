@@ -1274,6 +1274,39 @@ describe('worktree isolation lifecycle', () => {
     }
   })
 
+  /**
+   * Een pane die de verwachte tekst nooit laat zien, noemt die tekst.
+   *
+   * Gemeten 04-11-2026 met een agent waarvan readyMarker nooit op het scherm
+   * komt (wat gebeurt als een CLI na een update een ander invoerveld print):
+   * de start duurde 90 seconden en de melding zei alleen "pane not ready
+   * (waiting)". Dat is niet te repareren zonder te weten waarop ensemble zat te
+   * wachten, en dat staat in agents.json.
+   */
+  it('noemt de verwachte marker als de pane die nooit laat zien', async () => {
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      const config = await import('../lib/agent-config')
+      vi.mocked(config.resolveAgentProgram).mockReturnValue({ readyMarker: 'ZZZ_NOOIT', inputMethod: 'pasteFromFile' } as ReturnType<typeof config.resolveAgentProgram>)
+      // Een scherm dat leeft maar de marker nooit toont.
+      let tik = 0
+      mocks.runtime.capturePane.mockImplementation(async () => `  mimo laadt... ${tik++}`)
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(120_000)
+      await creation
+
+      expect(mocks.runtime.pasteFromFile).not.toHaveBeenCalled()
+      expect(appendedMessages.some(m => /ZZZ_NOOIT/.test(m.content))).toBe(true)
+      expect(appendedMessages.some(m => /readyMarker in agents\.json/.test(m.content))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
   it('ziet een dialoog die vlak na de eerste gereedheid verschijnt', async () => {
     vi.useFakeTimers()
     try {

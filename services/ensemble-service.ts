@@ -1182,7 +1182,15 @@ export async function createEnsembleTeam(
             const before = await runtime.capturePane(sessionName, 50)
             const screen = readyScreenState(before, marker)
             if (screen.state !== 'ready') {
-              const reden = screen.state === 'blocked' ? `dialog "${screen.dialog}"` : `pane not ready (${screen.state})`
+              // De marker erbij, want dat is het enige dat je kunt repareren:
+              // staat er iets anders op het scherm dan ensemble verwacht (een
+              // CLI die na een update een ander invoerveld print), dan is
+              // readyMarker in agents.json de plek. Gemeten 04-11-2026 met een
+              // marker die nooit matcht: de melding zei alleen "pane not ready
+              // (waiting)" en liet je zoeken.
+              const reden = screen.state === 'blocked'
+                ? `dialog "${screen.dialog}"`
+                : `pane not ready (${screen.state}; ensemble wacht op "${marker}" op het scherm, zie readyMarker in agents.json)`
               throw new Error(`${agent.name} did not take the prompt: ${reden}`)
             }
             await deliver()

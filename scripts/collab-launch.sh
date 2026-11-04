@@ -655,6 +655,32 @@ else
     echo -e "  ${BD}\033[93mNiet alle agents hebben binnen ${AGENT_WAIT_SECS}s een bericht gestuurd:${R}" >&2
   fi
   while IFS= read -r agent; do [ -z "$agent" ] || echo "  - $agent" >&2; done <<< "$SILENT_AGENTS"
+  # De service schrijft zijn eigen reden in de feed ("did not signal ready in
+  # time", "did not take the prompt: pane not ready (...)"). Die regel haalde
+  # het scherm niet, en juist die zegt wat er aan de hand is. Gemeten 04-11-2026
+  # met een agent waarvan de readyMarker nooit matcht: de launcher adviseerde
+  # rescue, terwijl rescue dezelfde marker toetst en dus niet kan helpen.
+  if [ -n "$DELIVERY_FAILED" ]; then
+    REDENEN=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+namen = [naam for naam in sys.argv[1].split() if naam]
+for bericht in data.get('messages', []):
+    if bericht.get('from') != 'ensemble':
+        continue
+    inhoud = ' '.join(str(bericht.get('content', '')).split())
+    if any(naam in inhoud for naam in namen) and ('did not' in inhoud or 'failed' in inhoud or 'ready' in inhoud):
+        print(inhoud[:300])
+" "$(printf '%s' "$SILENT_AGENTS" | tr '\n' ' ')" 2>/dev/null || true)
+    if [ -n "$REDENEN" ]; then
+      echo -e "  ${D}Wat de service erover zegt:${R}" >&2
+      while IFS= read -r regel; do [ -z "$regel" ] || echo "    $regel" >&2; done <<< "$REDENEN"
+    fi
+    echo "  Kijk op de pane: tmux attach -t ${TEAM_NAME}-<agent>" >&2
+  fi
   echo -n "  Opnieuw afleveren: scripts/collab-rescue.sh $TEAM_ID" >&2
   while IFS= read -r agent; do [ -z "$agent" ] || printf ' %q' "$agent" >&2; done <<< "$SILENT_AGENTS"
   echo >&2

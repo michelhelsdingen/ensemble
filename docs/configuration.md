@@ -121,7 +121,15 @@ The agent must support `team-say` and `team-read` shell commands in its PATH for
 
 The default team is **Codex (lead) + Claude Code (worker)**. This is the fully tested combination.
 
-**What "tested" means here.** The start path is measured live for `codex`, `claude`, `glm` and `grok`: 56 launches on 03-11-2026, timed from the command to the team being live. `agy`, `gemini`, `mimo` and `opencode` have working configuration entries and no measured start at all, so treat them as experimental: the delivery of a prompt depends on each CLI's own screen output, and that is what has never been checked for those four.
+**What "tested" means here.** Every agent below was started for real and timed, on 03 and
+04-11-2026: 56 launches for `codex`, `claude`, `glm` and `grok`, and then `agy`, `mimo` and
+`opencode` one at a time plus in pairs. Time from the command to the team being live, and time
+until the agent sent its own first message: `opencode` 11.5s/14.7s, `glm` 9.7s/60.5s, `mimo`
+16.8s/145.7s, `agy` 21.2s/30.6s. In pairs (two runs each): `agy`+`opencode` 13.9s, `mimo`+`glm`
+17.5s, `codex`+`claude` 15.7s, `glm`+`grok` 10.9s, all passing. `gemini` is the one entry with no
+measured start: its CLI is not installed here, and `agy` covers Google's models instead. Note the
+spread in that second number: it is the model thinking, not ensemble starting, which is why the
+launcher reports a team as live on delivery and not on the first message.
 
 | Agent | Status | Default? | Notes |
 |---|---|---|---|
