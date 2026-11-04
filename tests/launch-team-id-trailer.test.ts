@@ -16,8 +16,11 @@ const REGELS = fs.readFileSync(PAD, 'utf8').split('\n')
 
 describe('team-id trailer', () => {
   it('elke uitgang na het aanmaken van het team drukt het team-id af', () => {
-    // Exits vóór de POST tellen niet: daar bestaat het team nog niet.
-    const teamOntstaat = REGELS.findIndex(r => /^TEAM_ID=\$\(echo "\$RESULT"/.test(r))
+    // Exits vóór de POST tellen niet: daar bestaat het team nog niet. Het anker
+    // is de eerste regel ná de controle of er wel een team-id in het antwoord
+    // stond: de twee exits van die controle horen er juist niet bij, want dan
+    // is er geen team om een trailer over te schrijven.
+    const teamOntstaat = REGELS.findIndex(r => /^RUNTIME_DIR="\$\(collab_runtime_dir/.test(r))
     expect(teamOntstaat, 'regel waar TEAM_ID ontstaat niet gevonden').toBeGreaterThan(-1)
 
     const zonderTrailer: string[] = []

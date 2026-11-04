@@ -33,16 +33,26 @@ stub('collab-postcheck.sh', 'exit 0')
 const TEAM = '11111111-2222-3333-4444-555555555555'
 // Neppe curl: health, team aanmaken en de teamstatus. TEST_DELIVERY bepaalt wat
 // team_delivery_state straks uit die status leest.
+// Nep-curl die ook -o en -w kent: de launcher haalt het aanmaak-antwoord sinds
+// 04-11-2026 op met `-o <bestand> -w '%{http_code}'` in plaats van met `-sf`,
+// omdat -f bij een HTTP-fout het antwoord weggooit en exit 22 geeft.
 fs.writeFileSync(path.join(root, 'curl'), `#!/bin/bash
 echo "$@" >> "$TEST_ROOT/curl-aanroepen.log"
-URL=""
-for arg in "$@"; do case "$arg" in http*) URL="$arg";; esac; done
+URL=""; OUT=""; WRITEOUT=""; PREV=""
+for arg in "$@"; do
+  case "$PREV" in -o) OUT="$arg" ;; -w) WRITEOUT="$arg" ;; esac
+  case "$arg" in http*) URL="$arg";; esac
+  PREV="$arg"
+done
+BODY='{}'
 case "$URL" in
-  */api/v1/health) echo '{"ok":true}'; exit 0 ;;
-  */api/ensemble/teams) echo '{"team":{"id":"${TEAM}","name":"collab-test","agents":[{"name":"codex-1"},{"name":"glm-2"}]}}'; exit 0 ;;
-  */api/ensemble/teams/*) cat "$TEST_DELIVERY"; exit 0 ;;
+  */api/v1/health) BODY='{"ok":true}' ;;
+  */api/ensemble/teams) BODY='{"team":{"id":"${TEAM}","name":"collab-test","agents":[{"name":"codex-1"},{"name":"glm-2"}]}}' ;;
+  */api/ensemble/teams/*) BODY=$(cat "$TEST_DELIVERY") ;;
 esac
-echo '{}'
+if [ -n "$OUT" ]; then printf '%s' "$BODY" > "$OUT"; else printf '%s' "$BODY"; fi
+[ -n "$WRITEOUT" ] && printf '%s' 201
+exit 0
 `, { mode: 0o755 })
 
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))

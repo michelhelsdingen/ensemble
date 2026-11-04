@@ -90,9 +90,19 @@ warns instead and exits non-zero, pointing at `collab-rescue.sh <team-id>` as th
 | 0 | Team live, monitor open |
 | 1 | Server failed to start, or preflight failed |
 | 3 | Team created but the prompt never reached an agent |
+| 5 | The service refused to create the team, or returned no id; its own reason is printed |
 | 4 | Bridge died right after starting; the team keeps running and is left alone (see below) |
-| 7 | Preflight found no healthy agent and no usable replacement (passed through) |
+| 7 | Preflight found no healthy agent, no usable replacement, or a name that is not an agent (passed through) |
 | 9 | Preflight found an agent waiting on a startup dialog (passed through) |
+
+**A failure always says why.** Measured 04-11-2026: `/collab` with the typo `grk` printed
+"All preflight checks passed" and then exited 22 after 1.8 seconds with nothing else on screen.
+Two causes, both fixed. Preflight now checks the names against `agents.json` before any probe and
+exits 7 naming the agents that do exist (section 0a, python only, no node: that check costs about
+20ms). And the launcher fetched the create response with `curl -sf`, where `-f` throws the body away
+on an HTTP error and returns 22, which `set -e` then made the script's verdict: an exit code in no
+table and an empty screen. It now reads the status and the body separately and prints the service's
+own reason, which already was `Unknown agent(s): "grk". Available: ...`.
 
 **No script here ever ends a team.** Only you do, from the monitor (`d`) or with
 `POST /api/ensemble/teams/<id>/disband`. Fixed 04-11-2026, after three different safety nets each

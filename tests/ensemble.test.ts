@@ -908,16 +908,23 @@ describe('worktree isolation lifecycle', () => {
     }
   })
 
-  it('meldt een pane die niets aanneemt als afleverfout, niet als stille agent', async () => {
-    // Een pane die na het afleveren stil blijft staan heeft de prompt niet
-    // verwerkt. Die krijgt hem één keer opnieuw, en neemt hij hem dan nog niet
-    // aan, dan is dat een echte afleverfout: de launcher mag daarover klagen.
-    // Verschil met de test hieronder: daar verandert de pane wel, en dan is
-    // zwijgen gewoon denktijd.
+  it('duwt een zwijgende agent met een Enter en noemt dat geen afleverfout', async () => {
+    // Deze test zei tot 04-11-2026 het omgekeerde: dat een pane die na een
+    // tweede aflevering stil blijft staan een echte afleverfout is. Dat was
+    // mijn eigen verkeerde aanname, en ik heb hem gemeten. Op een eigen service
+    // nam glm de prompt aan, de launcher gaf exit 0, en daarna zette deze route
+    // dezelfde agent op `failed` met "the pane did not change", omdat een agent
+    // die nadenkt zijn scherm niet verandert.
+    //
+    // Het nieuwe contract: de eerste aflevering is het bewijs (daar verandert
+    // het scherm, anders gooit deliverChecked). Blijft het daarna stil, dan
+    // kan alleen het verzenden nog ontbreken, en dat is één Enter. De
+    // afleverstaat eindigt op `silent`, nooit op `failed`.
     vi.useFakeTimers()
     try {
       const team = makeTeam({ agents: [makeTeam().agents[0]] })
       const { mod, mocks, appendedMessages } = await setupWorktreeService(team)
+      const registry = await import('../lib/ensemble-registry')
       let afgeleverd = false
       mocks.runtime.sendKeys.mockImplementation(async () => { afgeleverd = true })
       mocks.runtime.capturePane.mockImplementation(async () => afgeleverd ? '> na' : '> voor')
@@ -926,11 +933,17 @@ describe('worktree isolation lifecycle', () => {
       })
       await vi.advanceTimersByTimeAsync(90_000)
       await creation
-      expect(mocks.runtime.sendKeys).toHaveBeenCalledTimes(2)
-      expect(appendedMessages.some(message =>
-        /codex-1 prompt verification failed/.test(message.content)
-        && /the pane did not change/.test(message.content),
-      )).toBe(true)
+
+      // Eén keer de prompt, daarna twee duwtjes, en geen prompt meer.
+      const aanroepen = mocks.runtime.sendKeys.mock.calls
+      expect(aanroepen).toHaveLength(3)
+      expect(aanroepen[1][1]).toBe('Enter')
+      expect(aanroepen[2][1]).toBe('Enter')
+      expect(aanroepen[0][1]).not.toBe('Enter')
+      const staten = vi.mocked(registry.setAgentDelivery).mock.calls.map(aanroep => aanroep[2])
+      expect(staten).not.toContain('failed')
+      expect(staten.at(-1)).toBe('silent')
+      expect(appendedMessages.some(message => /prompt verification failed/.test(message.content))).toBe(false)
     } finally {
       vi.useRealTimers()
     }
@@ -1209,6 +1222,53 @@ describe('worktree isolation lifecycle', () => {
       await creation
       expect(mocks.runtime.pasteFromFile).toHaveBeenCalledOnce()
       expect(appendedMessages.some(m => /did not take the prompt|nam de prompt niet/i.test(m.content))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /**
+   * Een agent die de prompt aannam en lang nadenkt mag niet alsnog als mislukt
+   * eindigen.
+   *
+   * Gemeten 04-11-2026 op een eigen service (poort 23010): glm nam de prompt
+   * aan, de launcher meldde "Prompt aangekomen bij alle agents" en gaf exit 0,
+   * en daarna zette de service die agent op `delivery: failed` met de reden
+   * "did not take the prompt: the pane did not change". Oorzaak: de
+   * bevestigingslus levert bij een herkansing opnieuw af via dezelfde
+   * deliverChecked, en die eist dat het scherm binnen vijf seconden verandert.
+   * Een agent die stil zit te denken verandert zijn scherm niet, dus de
+   * herkansing faalt en overschrijft een aflevering die al bewezen was.
+   *
+   * De aflevering is bewezen op het moment dat deliverChecked slaagt. Daarna
+   * mag er niets meer bij: geen tweede prompt in de pane, en geen oordeel dat
+   * de eerste tegenspreekt.
+   */
+  it('laat een bewezen aflevering staan, ook als de agent daarna lang zwijgt', async () => {
+    vi.useFakeTimers()
+    try {
+      const team = makeTeam({ agents: [makeTeam().agents[0]] })
+      const { mod, mocks } = await setupWorktreeService(team)
+      const registry = await import('../lib/ensemble-registry')
+      const config = await import('../lib/agent-config')
+      vi.mocked(config.resolveAgentProgram).mockReturnValue({ readyMarker: '>', inputMethod: 'pasteFromFile' } as ReturnType<typeof config.resolveAgentProgram>)
+      // Gereed, en na het plakken één keer veranderd: dat is het bewijs dat de
+      // pane de prompt aannam. Daarna staat het scherm stil, want de agent denkt.
+      let geplakt = false
+      mocks.runtime.pasteFromFile.mockImplementation(async () => { geplakt = true })
+      mocks.runtime.capturePane.mockImplementation(async () =>
+        geplakt ? '  Codex v0.164.0\n> aan het werk' : '  Codex v0.164.0\n> ')
+      const creation = mod.createEnsembleTeam({
+        name: team.name, description: team.description, agents: [{ program: 'codex' }],
+      })
+      await vi.advanceTimersByTimeAsync(200_000)
+      await creation
+
+      expect(mocks.runtime.pasteFromFile).toHaveBeenCalledOnce()
+      const staten = vi.mocked(registry.setAgentDelivery).mock.calls.map(aanroep => aanroep[2])
+      expect(staten).toContain('delivered')
+      expect(staten).not.toContain('failed')
+      expect(staten.at(-1)).toBe('silent')
     } finally {
       vi.useRealTimers()
     }

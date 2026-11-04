@@ -132,9 +132,17 @@ global file that a concurrent collab overwrites.
 
 **Check that the launch actually succeeded** before doing Step 2. `collab-launch.sh` can fail
 after the team already exists: exit `3` means a team was created but the prompt never reached an
-agent; exit `4` means the bridge or poller died right after starting. Both print a `TEAM_ID=`
+agent; exit `4` means the bridge died right after starting, and then the team keeps running without
+a link to the API (a poller that does not come up is only a warning). Both print a `TEAM_ID=`
 trailer anyway, but neither one printed `Team is live!`. Only tell the user the team is live when
-that exact line is in the output.
+that exact line is in the output. Neither code means the team was cleaned up: since 04-11-2026 no
+script here ends a team, so say what is wrong and leave the decision to the user.
+
+**Exits before the team exists.** Exit `7` from preflight now also covers a name that is not an
+agent at all (a typo): the message names the agents that do exist, so correct the name instead of
+retrying. Exit `5` means the service refused to create the team and its own reason is printed on
+the next line. Both happen in about a second and no team was created, so there is nothing to clean
+up and nothing to rescue.
 
 **A quiet agent is not a failed start.** The launcher returns as soon as every pane has taken its
 prompt, so a successful launch can print `nog geen bericht van: <agent>`. That agent is thinking;

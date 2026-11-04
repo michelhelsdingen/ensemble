@@ -216,12 +216,50 @@ if template:
     payload['templateName'] = template
 json.dump(payload, open(os.environ['PFILE'], 'w'))
 "
-RESULT=$(curl -sf -X POST "$API/api/ensemble/teams" \
+# Hier stond `curl -sf`, en -f gooit bij een HTTP-fout het antwoord weg en geeft
+# exit 22. Onder `set -e` stapte het script daar meteen uit: exitcode 22, die in
+# geen enkele tabel staat, en een leeg scherm. Gemeten 04-11-2026 met de
+# typefout `grk`: de service antwoordde netjes met 400 en
+# `Unknown agent(s): "grk". Available: ...`, en juist die regel haalde het
+# scherm niet. Nu halen we de code en het antwoord apart op.
+ANTWOORD_FILE=$(mktemp "${TMPDIR:-/tmp}/collab-create-XXXXXX")
+HTTP_CODE=$(curl -s -o "$ANTWOORD_FILE" -w '%{http_code}' -X POST "$API/api/ensemble/teams" \
   -H "Content-Type: application/json" \
-  -d @"$PAYLOAD_FILE")
+  -d @"$PAYLOAD_FILE" || echo "000")
 rm -f "$PAYLOAD_FILE"
+RESULT=$(cat "$ANTWOORD_FILE" 2>/dev/null || echo "")
+rm -f "$ANTWOORD_FILE"
 
-TEAM_ID=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['team']['id'])")
+case "$HTTP_CODE" in
+  200|201) ;;
+  *)
+    # Eén keer lezen, en bij onleesbare JSON (een proxy die HTML teruggeeft)
+    # de ruwe tekst tonen: iets is altijd beter dan niets.
+    REDEN=$(printf '%s' "$RESULT" | python3 -c "
+import json, sys
+ruw = sys.stdin.read()
+try:
+    data = json.loads(ruw)
+    print(data.get('error') or data.get('message') or json.dumps(data)[:400])
+except Exception:
+    print(' '.join(ruw.split())[:400])
+" 2>/dev/null || true)
+    echo -e "  \033[91m✗${R} De service wil dit team niet aanmaken (HTTP ${HTTP_CODE})" >&2
+    if [ -n "$REDEN" ]; then
+      printf '    %s\n' "$REDEN" >&2
+    else
+      echo "    Geen uitleg in het antwoord; kijk in /tmp/ensemble-server.log" >&2
+    fi
+    exit 5
+    ;;
+esac
+
+TEAM_ID=$(printf '%s' "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin)['team']['id'])" 2>/dev/null || true)
+if [ -z "$TEAM_ID" ]; then
+  echo -e "  \033[91m✗${R} De service gaf geen team-id terug (HTTP ${HTTP_CODE})" >&2
+  printf '    %s\n' "$(printf '%s' "$RESULT" | head -c 300)" >&2
+  exit 5
+fi
 RUNTIME_DIR="$(collab_runtime_dir "$TEAM_ID")"
 # De aanroepers (de collab-skill, cleanroom-test.sh) lezen het team-id van de
 # laatste TEAM_ID=-regel uit onze stdout. Bij een vroege exit moet die regel er

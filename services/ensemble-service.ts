@@ -1230,12 +1230,29 @@ export async function createEnsembleTeam(
               }
             }
           }
+          /**
+           * Het duwtje voor een agent die de prompt wel aannam maar niets zegt.
+           *
+           * Hier stond `deliver: deliverChecked`, dus een herkansing plakte de
+           * hele prompt opnieuw en eiste daarna weer dat het scherm binnen vijf
+           * seconden veranderde. Gemeten 04-11-2026: een agent die zat te
+           * denken verandert zijn scherm niet, dus die herkansing faalde en
+           * zette een aflevering die al bewezen was op `failed`, terwijl de
+           * launcher net exit 0 had gegeven. Wat er na een bewezen aflevering
+           * nog kan ontbreken is niet de tekst maar het verzenden, en daar is
+           * één Enter genoeg voor. Een tweede prompt in dezelfde pane is een
+           * tweede taak.
+           */
+          const nudge = async () => {
+            if (!local) return
+            await runtime.sendKeys(sessionName, 'Enter')
+          }
           try {
             setAgentDelivery(team.id, agent.name, 'pending')
             await deliverChecked()
             setAgentDelivery(team.id, agent.name, 'delivered')
             console.log(`[Ensemble] Prompt submitted to ${sessionName}; awaiting agent message`)
-            return { agent, sessionName, deliver: deliverChecked }
+            return { agent, sessionName, nudge }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             setAgentDelivery(team.id, agent.name, 'failed')
@@ -1261,7 +1278,7 @@ export async function createEnsembleTeam(
       })
       for (const result of deliveryResults) {
         if (!result) continue
-        const { agent, sessionName, deliver } = result
+        const { agent, sessionName, nudge } = result
         // De pane zoals hij er vlak na het afleveren uitzag. Verandert hij nog,
         // dan is deze agent aan het werk en krijgt hij zijn prompt niet opnieuw.
         // Gemeten 03-11-2026 (team ee1b35b0): glm-1 kreeg de prompt na 20s en
@@ -1281,8 +1298,8 @@ export async function createEnsembleTeam(
             } catch { return false }
           },
           retry: async () => {
-            console.warn(`[Ensemble] No message from ${agent.name}; retrying prompt submission to ${sessionName}`)
-            await deliver()
+            console.warn(`[Ensemble] No message from ${agent.name}; nudging ${sessionName} with a single Enter`)
+            await nudge()
           },
         }).then(confirmed => {
           if (confirmed) {
@@ -1304,11 +1321,15 @@ export async function createEnsembleTeam(
           }
         }).catch(err => {
           const reason = err instanceof Error ? err.message : String(err)
-          setAgentDelivery(team.id, agent.name, 'failed')
-          console.error(`[Ensemble] Prompt verification failed for ${agent.name}:`, reason)
+          // De aflevering is hierboven bewezen (deliverChecked slaagde), dus
+          // gaat ze niet meer op `failed`: dan zou dit oordeel de exit 0 van de
+          // launcher tegenspreken over een agent die gewoon werkt. Alleen de
+          // eerste aflevering kan mislukken.
+          setAgentDelivery(team.id, agent.name, 'silent')
+          console.error(`[Ensemble] Could not nudge ${agent.name} after delivery:`, reason)
           appendMessage(team.id, {
             id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-            content: `❌ ${agent.name} prompt verification failed: ${reason}`,
+            content: `⚠ ${agent.name} took the prompt; the extra Enter afterwards did not land (${reason}). Not a delivery failure.`,
             type: 'chat', timestamp: new Date().toISOString(),
           })
         })

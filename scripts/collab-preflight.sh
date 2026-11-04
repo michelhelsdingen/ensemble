@@ -153,6 +153,65 @@ if [ -n "$HEALTH_AGENTS" ]; then
   REQUESTED_LC="$HEALTH_AGENTS"
 fi
 
+# ─── 0a. Bestaan deze agents eigenlijk? ───
+# Een naam die in geen enkele agents.json staat is een typefout, en die hoort
+# hier te stoppen: vóór elke probe, met de namen die wel bestaan erbij.
+#
+# Gemeten 04-11-2026: `/collab ... grk` liep hier zonder morren door (alleen een
+# Warning "grk: unknown" tussen de vinkjes), meldde "All preflight checks passed"
+# en gaf daarna exit 22 zonder uitleg, want de launcher haalde het antwoord van
+# de service op met `curl -sf`. Alleen de naam toetsen, niet de gezondheid: een
+# agent die bestaat maar plat ligt houdt zijn eigen pad (health hook, exit
+# 3/4/6/7).
+#
+# Dit leest de twee configbestanden met python3 en start géén node: dat kost
+# ongeveer 20 milliseconden in plaats van een paar honderd, en preflight hoort
+# node alleen te starten als er een health-hook is (zie preflight-review.test).
+# `none` is de sentinel voor "geen agents", die blijft geldig.
+if command -v python3 > /dev/null 2>&1; then
+  BEKENDE_KEYS=$(python3 -c "
+import json, sys
+keys = []
+for pad in sys.argv[1:]:
+    try:
+        with open(pad, encoding='utf-8') as bron:
+            data = json.load(bron)
+        if isinstance(data, dict):
+            keys += [k for k in data if isinstance(k, str) and not k.startswith('__')]
+    except Exception:
+        pass
+print(' '.join(dict.fromkeys(keys)))
+" "${ENSEMBLE_AGENTS_CONFIG:-$SCRIPT_DIR/../agents.json}" \
+    "${ENSEMBLE_AGENTS_EXTRA:-$HOME/.config/ensemble/agents.json}" 2>/dev/null || true)
+  if [ -n "$(printf '%s' "$BEKENDE_KEYS" | tr -d '[:space:]')" ]; then
+    ONBEKEND=""
+    OUDE_IFS="$IFS"
+    IFS=','
+    for GEVRAAGD in $REQUESTED_LC; do
+      IFS="$OUDE_IFS"
+      GEVRAAGD=$(printf '%s' "$GEVRAAGD" | tr -d '[:space:]')
+      if [ -n "$GEVRAAGD" ] && [ "$GEVRAAGD" != "none" ]; then
+        # "claude code" en "claude-code" horen bij claude: het eerste woord telt.
+        EERSTE=$(printf '%s' "$GEVRAAGD" | tr '_-' '  ' | awk '{print $1}')
+        GEVONDEN=0
+        for KEY in $BEKENDE_KEYS; do
+          case "$GEVRAAGD" in "$KEY"*) GEVONDEN=1 ;; esac
+          [ "$EERSTE" = "$KEY" ] && GEVONDEN=1
+          [ "$GEVONDEN" = 1 ] && break
+        done
+        [ "$GEVONDEN" = 1 ] || ONBEKEND="$ONBEKEND $GEVRAAGD"
+      fi
+      IFS=','
+    done
+    IFS="$OUDE_IFS"
+    if [ -n "$ONBEKEND" ]; then
+      fail 7 "ensemble kent deze agent niet:$ONBEKEND
+     Bestaande agents: $(printf '%s' "$BEKENDE_KEYS" | tr -s ' ' | sed 's/^ //;s/ $//;s/ /, /g')
+     Eigen agent toevoegen: ~/.config/ensemble/agents.json"
+    fi
+  fi
+fi
+
 # ─── 0. Startdialoog: wacht een agent-CLI op een toets? ───
 # De codex-probe verderop gebruikt `codex exec`, en dat pad ziet geen
 # interactieve dialoog. Gemeten op 03-11-2026: codex 0.164.0 stond modaal in
