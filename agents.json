@@ -2,7 +2,7 @@
   "codex": {
     "name": "codex",
     "command": "codex",
-    "flags": ["--dangerously-bypass-approvals-and-sandbox"],
+    "flags": ["--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"],
     "readyMarker": "›",
     "inputMethod": "pasteFromFile",
     "color": "blue",

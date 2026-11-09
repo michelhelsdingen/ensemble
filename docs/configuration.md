@@ -42,7 +42,7 @@ The project `agents.json` file defines which AI agents ensemble can spawn. `ENSE
   "codex": {
     "name": "codex",
     "command": "codex",
-    "flags": ["--dangerously-bypass-approvals-and-sandbox"],
+    "flags": ["--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"],
     "readyMarker": "›",
     "inputMethod": "pasteFromFile",
     "color": "blue",
@@ -133,7 +133,7 @@ launcher reports a team as live on delivery and not on the first message.
 
 | Agent | Status | Default? | Notes |
 |---|---|---|---|
-| **Codex** | Fully tested | Yes (lead) | Uses `pasteFromFile` input, `--dangerously-bypass-approvals-and-sandbox` flag |
+| **Codex** | Fully tested | Yes (lead) | Uses `pasteFromFile` input, `--dangerously-bypass-approvals-and-sandbox` and `--dangerously-bypass-hook-trust` flags |
 | **Claude Code** | Fully tested | Yes (worker) | Uses `sendKeys` input |
 | **Grok CLI** | Tested in three-agent teams | No | Uses `pasteFromFile`, `--always-approve --trust`. Needs `hints = { project_picker_disabled = true }` in `~/.grok/config.toml`, otherwise the agent hangs on a directory picker in a fresh pane. |
 | **Antigravity CLI (`agy`)** | Configured | No | Uses `sendKeys`, `--dangerously-skip-permissions`, and unsets `GEMINI_API_KEY` and `GOOGLE_API_KEY` before launch. |
@@ -342,6 +342,7 @@ Ensemble agents run autonomously inside `tmux` sessions without a human at the t
 | Flag | Agent | Purpose |
 |---|---|---|
 | `--permission-mode auto` | Claude Code | Allows tool execution, file edits, and shell commands without interactive permission prompts. |
+| `--dangerously-bypass-hook-trust` | Codex | Runs already-enabled lifecycle hooks without the startup trust review. Without it, Codex opens a blocking "Hooks need review" dialog whenever a hook is new or changed, which only a human can answer: that aborts preflight (exit 9) and takes the whole team down. A hook the user declined stays disabled, so this flag never enables anything they turned off. It is a trust bypass, so only use it where the hook sources are the operator's own. |
 | `--dangerously-bypass-approvals-and-sandbox` | Codex | Runs without approval prompts or sandbox. Replaces the `--full-auto` flag that Codex CLI removed in 0.147.0; the sandboxed equivalent is `--sandbox workspace-write`. |
 | `--always-approve --trust` | Grok CLI | Skips per-action approval and the folder-trust dialog. |
 
