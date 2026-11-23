@@ -694,6 +694,8 @@ elif [ "$MONITOR_MODE" = "herdr" ]; then
   echo -e "  ${D}┌─ Monitor (herdr pane) ────────────────┐${R}"
 elif [ "$MONITOR_MODE" = "orca" ]; then
   echo -e "  ${D}┌─ Monitor (Orca pane) ─────────────────┐${R}"
+elif [ "$MONITOR_MODE" = "orca-webfeed" ]; then
+  echo -e "  ${D}┌─ Monitor (Orca browser feed) ─────────┐${R}"
 elif [ "$MONITOR_MODE" = "iterm" ]; then
   echo -e "  ${D}┌─ Monitor (iTerm native pane) ─────────┐${R}"
 elif [ "$MONITOR_MODE" = "none" ]; then
