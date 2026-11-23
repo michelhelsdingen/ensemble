@@ -5,7 +5,8 @@
 # Usage: collab-postcheck.sh <team-id> [wait-seconds]
 #
 # Exit codes:
-#   0 — agents healthy (or messages already exchanged)
+#   0: agents healthy (or messages already exchanged), or the team is already
+#       finished or disbanded (nothing left to check)
 #   1 — team-id not found
 #   2 — agent stuck in error state (kills team, prints diagnosis), of nul
 #       berichten na de wachttijd (team blijft leven, roep collab-rescue.sh aan)
@@ -27,6 +28,32 @@ if [ ! -d "$RD" ]; then
   exit 1
 fi
 
+# Een team dat klaar of opgeheven is heeft geen postcheck nodig. Zonder deze
+# controle adviseerde de postcheck een rescue voor een team dat al was afgerond
+# (gemeten: de postcheck.log van een afgerond team noemde vijf agents "stil").
+# .finished is het bewijs op schijf; de service is het bewijs voor een team dat
+# is opgeheven zonder dat de marker er al staat.
+team_is_over() {
+  [ -f "$RD/.finished" ] && return 0
+  local status
+  status=$(curl -sf "$API/api/ensemble/teams/$TEAM_ID" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print((data.get('team', data) or {}).get('status', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)
+  [ "$status" = "disbanded" ]
+}
+stop_when_over() {
+  if team_is_over; then
+    echo -e "${GRN}✓${R} Team $TEAM_ID is al afgerond of opgeheven; postcheck stopt, er is niets te redden"
+    exit 0
+  fi
+}
+stop_when_over
+
 # Alleen de sessies van dit team. Eerder stond hier een tmux-scan op de vorm van
 # de sessienaam, waardoor een fout in team A alle sessies van team B meenam.
 if [ -f "$RD/sessions" ]; then
@@ -42,6 +69,8 @@ fi
 
 echo -e "${BD}collab postcheck (waiting ${WAIT}s for agents to settle)${R}"
 sleep "$WAIT"
+# Het team kan tijdens het wachten klaar zijn gekomen.
+stop_when_over
 
 ERRORS_FOUND=0
 ERROR_LOG=""

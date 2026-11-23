@@ -117,17 +117,28 @@ ORPHANS=0
 KILLED=0
 SPARED=0
 
-# Finished browser feeds are eligible after the same age threshold.
+# Browser feeds of teams that are over are eligible after the same age threshold:
+# finished teams (age of .finished) and teams without .finished that are no longer
+# in the register (age of the feed's own pid or page-id file). The second kind is
+# a start that failed or a team that was lost: its feed server otherwise ran until
+# the hard time limit.
 if [ -d "$ROOT" ]; then
   for RD in "$ROOT"/*; do
-    [ -d "$RD" ] && [ -f "$RD/.finished" ] || continue
+    [ -d "$RD" ] || continue
     [ -f "$RD/webfeed-page-id" ] || [ -f "$RD/webfeed.pid" ] || continue
     ID="$(basename "$RD")"
     case " $LIVE_IDS " in *" $ID "*) continue ;; esac
-    if stat -f '%m' "$RD/.finished" >/dev/null 2>&1; then
-      FINISHED_TS="$(stat -f '%m' "$RD/.finished")"
+    if [ -f "$RD/.finished" ]; then
+      MARKER="$RD/.finished"
+    elif [ -f "$RD/webfeed.pid" ]; then
+      MARKER="$RD/webfeed.pid"
     else
-      FINISHED_TS="$(stat -c '%Y' "$RD/.finished")"
+      MARKER="$RD/webfeed-page-id"
+    fi
+    if stat -f '%m' "$MARKER" >/dev/null 2>&1; then
+      FINISHED_TS="$(stat -f '%m' "$MARKER")"
+    else
+      FINISHED_TS="$(stat -c '%Y' "$MARKER")"
     fi
     [ "$((NOW - FINISHED_TS))" -ge "$MIN_AGE_SECONDS" ] || continue
     if [ "$MODE" = force ]; then

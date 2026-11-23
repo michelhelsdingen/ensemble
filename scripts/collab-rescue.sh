@@ -12,25 +12,57 @@
 #
 # Gebruik:
 #   collab-rescue.sh <TEAM_ID> [agent-name ...]
-#   collab-rescue.sh         # gebruikt /tmp/collab-team-id.txt
+#   collab-rescue.sh         # het enige actieve team; bij meer dan een: stoppen met de lijst
 #
 # With no agent names, retry only agents without a message.
 
 set -euo pipefail
 
-TEAM_ID="${1:-$(cat /tmp/collab-team-id.txt 2>/dev/null || true)}"
-if [ "$#" -gt 0 ]; then shift; fi
-REQUESTED_AGENTS=("$@")
-
-if [ -z "$TEAM_ID" ]; then
-  echo "FOUT: geen team-id opgegeven en /tmp/collab-team-id.txt niet gevonden" >&2
-  exit 1
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=collab-paths.sh
 . "$SCRIPT_DIR/collab-paths.sh"
+
+# Zonder team-id: het globale bestand wordt door elke launch overschreven, dus
+# bij twee actieve teams pakte rescue stil het verkeerde. Actief is een team zonder
+# .finished waarvan minstens een sessie uit het register nog in tmux leeft.
+actieve_teams() {
+  local dir id sessie
+  for dir in "$(collab_runtime_root)"/*/; do
+    [ -f "$dir/sessions" ] && [ ! -f "$dir/.finished" ] || continue
+    id="$(basename "$dir")"
+    while IFS= read -r sessie; do
+      [ -n "$sessie" ] && tmux has-session -t "$sessie" 2>/dev/null && { echo "$id"; break; }
+    done < "$dir/sessions"
+  done
+  # De status van de laatste lusronde mag niet de status van de functie zijn:
+  # onder set -e stopte het script anders stil bij een dood team als laatste map.
+  return 0
+}
+
+if [ "$#" -gt 0 ]; then
+  TEAM_ID="$1"
+  shift
+else
+  ACTIEF="$(actieve_teams)"
+  AANTAL=$(printf '%s' "$ACTIEF" | grep -c . || true)
+  if [ "$AANTAL" -gt 1 ]; then
+    echo "FOUT: er zijn $AANTAL actieve teams; geef zelf het team-id op:" >&2
+    printf '  %s\n' $ACTIEF >&2
+    echo "Gebruik: collab-rescue.sh <team-id> [agent-name ...]" >&2
+    exit 1
+  elif [ "$AANTAL" -eq 1 ]; then
+    TEAM_ID="$ACTIEF"
+  else
+    TEAM_ID="$(cat "${COLLAB_TEAM_ID_FILE:-/tmp/collab-team-id.txt}" 2>/dev/null || true)"
+  fi
+fi
+REQUESTED_AGENTS=("$@")
+
+if [ -z "$TEAM_ID" ]; then
+  echo "FOUT: geen team-id opgegeven en geen actief team gevonden" >&2
+  exit 1
+fi
 RD="$(collab_runtime_dir "$TEAM_ID")"
 
 if [ ! -d "$RD" ]; then

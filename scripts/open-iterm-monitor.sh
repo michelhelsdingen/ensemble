@@ -2,12 +2,15 @@
 # open-iterm-monitor.sh — Open the collab TUI monitor in a native iTerm2 split pane.
 # Usage: open-iterm-monitor.sh <repo-dir> <team-id> [split|tab|window]
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./collab-paths.sh
+source "$SCRIPT_DIR/collab-paths.sh"
 
 REPO_DIR="${1:?Usage: open-iterm-monitor.sh <repo-dir> <team-id> [split|tab|window]}"
 TEAM_ID="${2:?team-id required}"
 MODE="${3:-split}"
 
-LOG=/tmp/collab-iterm-last.log
+LOG="${COLLAB_ITERM_LOG:-/tmp/collab-iterm-last.log}"
 echo "=== $(date '+%F %T') open-iterm-monitor ($MODE) team=$TEAM_ID ===" > "$LOG"
 
 if [ "$(uname)" != "Darwin" ]; then
@@ -20,10 +23,9 @@ if ! osascript -e 'tell application "System Events" to (name of processes) conta
   exit 3
 fi
 
-REPO_DIR_Q=$(printf '%q' "$REPO_DIR")
 # Disable zsh CORRECT for this line: prevents "correct 'rcd' to 'cd'" prompt
 # wanneer race tussen write-text en shell-init een stray char prepend.
-CMD="unsetopt CORRECT 2>/dev/null; cd $REPO_DIR_Q && ./node_modules/.bin/tsx cli/monitor.ts ${TEAM_ID}"
+CMD="unsetopt CORRECT 2>/dev/null; $(collab_monitor_command "$REPO_DIR" "$TEAM_ID")"
 
 # iTerm2 sets ITERM_SESSION_ID like "w0t1p0:UUID" in every shell. Strip the
 # prefix so we can match session ids via AppleScript.

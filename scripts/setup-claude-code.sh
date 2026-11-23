@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 # setup-claude-code.sh — Install ensemble as /collab skill in Claude Code
-# Usage: ./scripts/setup-claude-code.sh
+# Usage: ./scripts/setup-claude-code.sh [--force]
+#
+#   --force   overwrite the installed skill even if it was edited locally
+#             (a dated backup is made first).
 set -euo pipefail
+
+FORCE=0
+for ARG in "$@"; do
+  case "$ARG" in
+    --force) FORCE=1 ;;
+    -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
+    *) echo "Unknown argument: $ARG (expected --force)" >&2; exit 1 ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -21,14 +33,48 @@ echo ""
 # ─── 1. Install skill ───
 mkdir -p "$SKILL_DIR"
 if [ -f "$REPO_DIR/skill/SKILL.md" ]; then
-  sed "s|__ENSEMBLE_DIR__|${REPO_DIR}|g" "$REPO_DIR/skill/SKILL.md" > "$SKILL_DIR/SKILL.md"
+  INSTALLED="$SKILL_DIR/SKILL.md"
+  NEWFILE="$SKILL_DIR/SKILL.md.new"
+  # The hash of what an earlier install wrote. A skill with local rules added
+  # no longer matches it, and then it is not ours to overwrite.
+  HASHFILE="$SKILL_DIR/.SKILL.md.installed-sha256"
+  sed "s|__ENSEMBLE_DIR__|${REPO_DIR}|g" "$REPO_DIR/skill/SKILL.md" > "$NEWFILE"
   # Guard against a hand-copied skill: an unresolved placeholder means every script
   # path in the installed skill is broken.
-  if grep -q '__ENSEMBLE_DIR__' "$SKILL_DIR/SKILL.md"; then
+  if grep -q '__ENSEMBLE_DIR__' "$NEWFILE"; then
+    rm -f "$NEWFILE"
     echo -e "  \033[91m✗${R} Placeholder __ENSEMBLE_DIR__ survived substitution, aborting"
     exit 1
   fi
-  echo -e "  ${CHECK} Skill installed → ${D}${SKILL_DIR}/SKILL.md${R}"
+  sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+  NEW_SHA="$(sha "$NEWFILE")"
+  INSTALL_IT=1
+  if [ -f "$INSTALLED" ]; then
+    CUR_SHA="$(sha "$INSTALLED")"
+    if [ "$CUR_SHA" = "$NEW_SHA" ]; then
+      INSTALL_IT=0
+      echo -e "  ${CHECK} Skill already up to date → ${D}${INSTALLED}${R}"
+    elif [ "$FORCE" -eq 1 ] || { [ -f "$HASHFILE" ] && [ "$CUR_SHA" = "$(cat "$HASHFILE")" ]; }; then
+      BACKUP="$INSTALLED.bak-$(date +%Y%m%d-%H%M%S)"
+      cp "$INSTALLED" "$BACKUP"
+      echo -e "  ${CHECK} Backup of the installed skill → ${D}${BACKUP}${R}"
+    else
+      INSTALL_IT=0
+      echo -e "  ${WARN} The installed skill differs from the last install, so it was edited locally: ${D}not overwritten${R}"
+      echo -e "     See the differences:  diff -u \"$INSTALLED\" \"$NEWFILE\""
+      echo -e "     Overwrite anyway:     $0 --force ${D}(a backup is made first)${R}"
+      NEWFILE_KEEP=1
+    fi
+  fi
+  if [ "$INSTALL_IT" -eq 1 ]; then
+    mv "$NEWFILE" "$INSTALLED"
+    printf '%s\n' "$NEW_SHA" > "$HASHFILE"
+    echo -e "  ${CHECK} Skill installed → ${D}${INSTALLED}${R}"
+  elif [ "${NEWFILE_KEEP:-0}" -ne 1 ]; then
+    # Identical to what we would write: remember it as ours.
+    printf '%s\n' "$NEW_SHA" > "$HASHFILE"
+    rm -f "$NEWFILE"
+  fi
 else
   echo -e "  \033[91m✗${R} skill/SKILL.md not found in repo"
   exit 1
@@ -40,6 +86,7 @@ fi
 SCRIPTS=(
   "Bash(${REPO_DIR}/scripts/collab-launch.sh:*)"
   "Bash(${REPO_DIR}/scripts/collab-poll.sh:*)"
+  "Bash(${REPO_DIR}/scripts/collab-wait.sh:*)"
   "Bash(${REPO_DIR}/scripts/collab-status.sh:*)"
   "Bash(${REPO_DIR}/scripts/collab-cleanup.sh:*)"
   "Bash(${REPO_DIR}/scripts/collab-replay.sh:*)"

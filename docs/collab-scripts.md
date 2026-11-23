@@ -142,10 +142,23 @@ spoken yet after three asks, which is not a delivery problem and not worth a res
 after 3 prompt attempts") sent the reader looking in the wrong place. A message in the feed also
 outweighs the recorded state, so an agent that speaks late still counts as confirmed.
 
-Every exit that happens after the team is created prints a `TEAM_ID=<id>` trailer, including the
-failing ones, so a caller can always find the runtime directory to investigate or rescue. Grep
+The launcher always prints one `Plan: agents=<keys>, template=<name or none>` line (whatever the
+source of the line-up), and every exit that happens after the team is created prints
+`MONITOR_MODE=<mode>` followed by a `TEAM_ID=<id>` trailer, including the failing ones. The mode is
+the one really used (`herdr`, `orca`, `orca-webfeed`, `split`, `iterm`, `session` or `none`; `none`
+until a monitor was opened) and is detected from the directory the launcher was started in, not from
+the team's working directory. A caller can always find the runtime directory to investigate or rescue. Grep
 for that line instead of reading `/tmp/collab-team-id.txt`, which is global and gets overwritten
 when two collabs run at the same time.
+
+Every call to the Orca CLI (`tab create`, `terminal list`, `terminal split`) is limited to
+`COLLAB_ORCA_TIMEOUT` seconds (default 10); past that the launcher falls back to the detached tmux
+session like for any other Orca error. The browser feed server stops 20 s
+(`COLLAB_WEBFEED_GRACE_SECONDS`) after it handed the finish line to the page, at the latest
+`COLLAB_WEBFEED_UNSERVED_SECONDS` (default 600) after `.finished` appeared if no page came back, and
+in any case after `COLLAB_WEBFEED_MAX_SECONDS` (default 21600, 6 hours). The browser pane itself is
+never closed automatically. Each launch keeps its own agent override file
+(`collab-agents-override.<pid>.txt` under the runtime root) and removes it on exit.
 
 ---
 
@@ -243,7 +256,7 @@ was working, and posted its conclusion two minutes later.
 
 | Exit | Meaning |
 |---|---|
-| 0 | Agents healthy, prompt delivered, or nothing to check (no register, or an empty one) |
+| 0 | Agents healthy, prompt delivered, the team is already finished or disbanded, or nothing to check (no register, or an empty one) |
 | 1 | Team-id not found |
 | 2 | An agent is in a fatal error state, or a delivery really failed (the team is left running) |
 
@@ -257,7 +270,7 @@ matched (codex's prompt format varies enough that this happens occasionally).
 
 ```bash
 ./scripts/collab-rescue.sh <team-id>
-./scripts/collab-rescue.sh              # falls back to /tmp/collab-team-id.txt
+./scripts/collab-rescue.sh              # the only active team; with more than one it stops and lists them
 ```
 
 It judges delivery the way the service does: it checks the pane before pasting (`pane-ready.ts`),
@@ -283,6 +296,24 @@ Exits `0` if the team already looked active (more than two messages) or delivery
 messages within 10s; exits `1` on a missing team-id, runtime dir, prompts, or session register;
 exits `2` if delivery ran but no new messages showed up, in which case it prints the `tmux
 attach` command for each session so you can look yourself.
+
+---
+
+## collab-wait.sh
+
+**Waits until a team has finished and prints its summary.** Meant to run as a background command.
+
+```bash
+./scripts/collab-wait.sh <team-id> [--max <seconds>]
+```
+
+It checks every 2 seconds (`COLLAB_WAIT_POLL` overrides) for `.finished` or `summary.txt`.
+
+| Output | Exit | Meaning |
+|---|---|---|
+| `COLLAB_COMPLETE` + summary | 0 | The team finished |
+| `COLLAB_WAIT_TIMEOUT` | 2 | The limit (default 3300 s) passed first; the team still runs, call it again |
+| error on stderr | 1 | Bad arguments or unknown team |
 
 ---
 

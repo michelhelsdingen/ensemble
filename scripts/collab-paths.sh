@@ -84,6 +84,50 @@ collab_finished_marker() {
   printf '%s/.finished\n' "$(collab_runtime_dir "$team_id")"
 }
 
+# Het ene monitorcommando voor elke manier om de monitor te openen (herdr, Orca,
+# iTerm, tmux-split en alle terugvalsessies). Alleen de tmux-split gaf de
+# ENSEMBLE_*-variabelen van de aanroeper door; de andere vijf startten de
+# monitor met de standaardinstellingen, dus tegen een verkeerde service.
+# Gebruik: collab_monitor_command <repo-dir> <team-id> [exec]
+collab_monitor_command() {
+  local repo="${1:?repo dir required}" team_id="${2:?team id required}" use_exec="${3:-}"
+  local prefix="" key value
+  for key in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
+    value="${!key:-}"
+    if [ -n "$value" ]; then
+      prefix+="$key=$(printf '%q' "$value") "
+    fi
+  done
+  [ "$use_exec" = exec ] && prefix+="exec "
+  printf 'cd %s && %s./node_modules/.bin/tsx cli/monitor.ts %s' "$(printf '%q' "$repo")" "$prefix" "$(printf '%q' "$team_id")"
+}
+
+# Voer een commando uit met een tijdgrens. Een hangende Orca-CLI hield de launcher
+# onbegrensd vast. `timeout` uit coreutils staat niet op een kale macOS, python3
+# wel (de scripts hier vereisen het al). Uitvoer en stdin gaan ongewijzigd door;
+# bij overschrijding wordt de hele procesgroep gedood en is de exitcode 124.
+# Gebruik: collab_run_bounded <seconden> <commando> [argumenten...]
+collab_run_bounded() {
+  local secs="${1:?seconds required}"
+  shift
+  python3 -c '
+import os, signal, subprocess, sys
+limit = float(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    code = process.wait(timeout=limit)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+    print("collab_run_bounded: tijdslimiet van %gs overschreden: %s" % (limit, sys.argv[2]), file=sys.stderr)
+    sys.exit(124)
+sys.exit(128 - code if code < 0 else code)
+' "$secs" "$@"
+}
+
 # Bewijs dat een team echt leeft: minstens één regel in messages.jsonl.
 # Zonder deze functie meldde launch "Team is live!" terwijl hij net zelf had
 # vastgesteld dat er nul berichten waren.

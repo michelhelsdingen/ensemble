@@ -102,6 +102,35 @@ describe('one-team webfeed server', () => {
     expect(fs.existsSync(path.join(team, 'webfeed.port'))).toBe(false)
   })
 
+  it('rekent de grace vanaf het moment dat de pagina het eindbericht kreeg', async () => {
+    const { runtime, team } = fixture()
+    const child = spawn('python3', [server, 'team-1'], {
+      env: { ...process.env, COLLAB_RUNTIME_ROOT: runtime, COLLAB_WEBFEED_GRACE_SECONDS: '0.4', COLLAB_WEBFEED_UNSERVED_SECONDS: '30', COLLAB_WEBFEED_MAX_SECONDS: '30' }, stdio: 'ignore',
+    })
+    children.push(child)
+    await waitFor(() => fs.existsSync(path.join(team, 'webfeed.port')))
+    const port = Number(fs.readFileSync(path.join(team, 'webfeed.port'), 'utf8'))
+    fs.writeFileSync(path.join(team, 'summary.txt'), 'Klaar')
+    fs.writeFileSync(path.join(team, '.finished'), 'done')
+    // Een trage pagina (verborgen tabblad) komt pas na de grace langs: de server
+    // moet er dan nog zijn en het eindbericht geven.
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    expect(child.exitCode).toBeNull()
+    expect((await get(port, '/messages.jsonl')).body).toContain('Klaar')
+    await waitFor(() => child.exitCode !== null, 4000)
+  })
+
+  it('stopt ook als niemand het eindbericht ophaalt, na het plafond voor onopgehaalde feeds', async () => {
+    const { runtime, team } = fixture()
+    const child = spawn('python3', [server, 'team-1'], {
+      env: { ...process.env, COLLAB_RUNTIME_ROOT: runtime, COLLAB_WEBFEED_GRACE_SECONDS: '0.2', COLLAB_WEBFEED_UNSERVED_SECONDS: '0.6', COLLAB_WEBFEED_MAX_SECONDS: '30' }, stdio: 'ignore',
+    })
+    children.push(child)
+    await waitFor(() => fs.existsSync(path.join(team, 'webfeed.port')))
+    fs.writeFileSync(path.join(team, '.finished'), 'done')
+    await waitFor(() => child.exitCode !== null, 4000)
+  })
+
   it('rejects unsafe team ids', () => {
     const { runtime } = fixture()
     const result = spawnSync('python3', [server, '..'], { env: { ...process.env, COLLAB_RUNTIME_ROOT: runtime }, encoding: 'utf8' })

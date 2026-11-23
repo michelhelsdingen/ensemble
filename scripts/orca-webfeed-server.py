@@ -18,8 +18,13 @@ team = root / TEAM_ID
 if not team.is_dir() or team.is_symlink() or team.resolve().parent != root:
     sys.exit("team directory missing or unsafe")
 page = Path(__file__).with_name("orca-webfeed.html").read_bytes()
+# The grace period starts when the page has been served the finish line once, so a
+# page that polls slowly (a hidden tab) still gets the last state and the summary.
+# A page that never comes back (closed tab) does not keep the server alive for the
+# whole hard limit: the unserved ceiling counts from the moment .finished appeared.
 grace = float(os.environ.get("COLLAB_WEBFEED_GRACE_SECONDS", "20"))
-limit = float(os.environ.get("COLLAB_WEBFEED_MAX_SECONDS", "86400"))
+unserved_limit = float(os.environ.get("COLLAB_WEBFEED_UNSERVED_SECONDS", "600"))
+limit = float(os.environ.get("COLLAB_WEBFEED_MAX_SECONDS", "21600"))
 
 
 def team_file(name):
@@ -29,14 +34,20 @@ def team_file(name):
     return candidate if candidate.is_file() else None
 
 
+served_finish_at = None
+
+
 class Feed(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        global served_finish_at
         if self.path == "/":
             body, content_type = page, "text/html; charset=utf-8"
         elif self.path == "/messages.jsonl":
             source = team_file("messages.jsonl")
             body = source.read_bytes() if source else b""
             if team_file(".finished"):
+                if served_finish_at is None:
+                    served_finish_at = time.monotonic()
                 summary = team_file("summary.txt")
                 end = {"type": "webfeed-finished", "summary": summary.read_text() if summary else ""}
                 body = body.rstrip(b"\n") + b"\n" + json.dumps(end).encode() + b"\n"
@@ -79,7 +90,10 @@ try:
         if team_file(".finished"):
             if finished_at is None:
                 finished_at = time.monotonic()
-            if time.monotonic() - finished_at >= grace:
+            now = time.monotonic()
+            if served_finish_at is not None and now - served_finish_at >= grace:
+                break
+            if now - finished_at >= unserved_limit:
                 break
 finally:
     server.server_close()

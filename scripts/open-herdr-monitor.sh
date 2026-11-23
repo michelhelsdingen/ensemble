@@ -11,12 +11,15 @@
 # Detection note: herdr passes TERM_PROGRAM through unchanged, so a shell inside
 # herdr still reports TERM_PROGRAM=iTerm.app. HERDR_ENV is the reliable signal.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./collab-paths.sh
+source "$SCRIPT_DIR/collab-paths.sh"
 
 REPO_DIR="${1:?Usage: open-herdr-monitor.sh <repo-dir> <team-id> [split|tab]}"
 TEAM_ID="${2:?team-id required}"
 MODE="${3:-split}"
 
-LOG=/tmp/collab-herdr-last.log
+LOG="${COLLAB_HERDR_LOG:-/tmp/collab-herdr-last.log}"
 echo "=== $(date '+%F %T') open-herdr-monitor ($MODE) team=$TEAM_ID ===" > "$LOG"
 
 if [ "${HERDR_ENV:-}" != "1" ]; then
@@ -72,7 +75,7 @@ echo "new_pane=$NEW_PANE" >> "$LOG"
 # herdr runs the command directly, so there is no shell prompt to race against
 # and none of the zsh autocorrect trouble the iTerm path has to work around.
 herdr pane run "$NEW_PANE" \
-  bash -lc "cd $(printf '%q' "$REPO_DIR") && exec ./node_modules/.bin/tsx cli/monitor.ts $(printf '%q' "$TEAM_ID")" \
+  bash -lc "$(collab_monitor_command "$REPO_DIR" "$TEAM_ID" exec)" \
   >> "$LOG" 2>&1
 
 # Label the pane with the project directory, so a workspace with several panes

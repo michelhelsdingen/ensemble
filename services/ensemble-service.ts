@@ -1520,6 +1520,7 @@ export async function writeDisbandSummary(
   )
 
   const cleanContent = (s: string) => s.replace(/\/tmp\/ensemble[-\w]*/g, '').trim()
+  const transcriptPointer = collabMessagesFile(teamId)
 
   const summaryText = agents.map(agent => {
     const msgs = agentMsgs
@@ -1531,16 +1532,28 @@ export async function writeDisbandSummary(
     // contain the recommendation, rationale, build list, or concrete
     // conclusions that matter. Fall back to first/last if <3 total.
     const ranked = [...msgs].sort((a, b) => b.content.length - a.content.length).slice(0, 3)
+    const SUMMARY_CUT = 1200
+    const truncatedNote = `... [afgekapt, volledig in ${transcriptPointer}]`
     const keyMsgs = ranked.length
       ? ranked
-          .map((m, i) => `  [${i + 1}] (${m.content.length} chars)\n    ${m.content.slice(0, 1200).replace(/\n/g, '\n    ')}`)
+          .map((m, i) => {
+            const cut = m.content.length > SUMMARY_CUT
+            const text = (cut ? m.content.slice(0, SUMMARY_CUT) + truncatedNote : m.content).replace(/\n/g, '\n    ')
+            return `  [${i + 1}] (${m.content.length} chars)\n    ${text}`
+          })
           .join('\n')
       : '  (no substantive messages)'
-    return `${agent} (${msgs.length} msgs, tokens: ${tokens})\nKey messages:\n${keyMsgs}`
+    // The longest messages are often early analysis. The conclusion an agent
+    // posts last is what a reader needs most, so it is always included in full:
+    // the last message of at least 200 characters, else simply the last one.
+    const lastMsg = [...msgs].reverse().find(m => m.content.length >= 200) ?? msgs[msgs.length - 1]
+    const lastBlock = lastMsg
+      ? `\nLast contribution (full):\n    ${lastMsg.content.replace(/\n/g, '\n    ')}`
+      : ''
+    return `${agent} (${msgs.length} msgs, tokens: ${tokens})\nKey messages:\n${keyMsgs}${lastBlock}`
   }).join('\n\n')
 
   const summaryFile = collabSummaryFile(teamId)
-  const transcriptPointer = collabMessagesFile(teamId)
   fs.mkdirSync(path.dirname(summaryFile), { recursive: true })
   fs.writeFileSync(
     summaryFile,

@@ -16,9 +16,14 @@
 #   COLLAB_MONITOR=none     no monitor at all
 #   COLLAB_ORCA_MODE=split (default) | tab   how Orca opens the monitor
 #   COLLAB_ITERM_MODE=split (default) | tab | window   how iTerm opens the monitor
+# The monitor is chosen from the directory this script is started in (the
+# caller's physical $PWD), not from <working-dir>. The chosen mode is printed as
+# MONITOR_MODE=<mode>, right before TEAM_ID=, together with a "Plan: agents=..." line.
 # COLLAB_WORKTREE=team creates a retained shared git worktree for local agents.
 set -euo pipefail
 
+# De map van waaruit gestart is, voor de monitordetectie. Vóór elke cd vastgelegd.
+START_DIR="$(pwd -P)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=./collab-paths.sh
@@ -34,6 +39,7 @@ TASK="${2:?Usage: collab-launch.sh <cwd> <task> [agents] [template]}"
 # keep preflight's automatic fallback.
 AGENTS="${3:-${COLLAB_AGENTS:-}}"
 AGENTS_SOURCE="explicit"
+PLAN_REASON=""
 if [ -z "${3:-}" ]; then
   AGENTS_SOURCE="env"
 fi
@@ -45,7 +51,15 @@ TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
 # Preflight writes OVERRIDE_FILE when an agent probe selects a fallback. The
 # default is under the shared runtime root and can be overridden by callers.
 # Only kicks in if caller didn't specify AGENTS explicitly.
-OVERRIDE_FILE="${COLLAB_OVERRIDE_FILE:-$(collab_runtime_root)/collab-agents-override.txt}"
+# Per launch een eigen bestand: het gedeelde pad liet twee gelijktijdige launches
+# elkaars agentkeuze wissen of overnemen. Een door de aanroeper opgegeven bestand
+# blijft van de aanroeper; het eigen bestand ruimen we bij het afsluiten op.
+if [ -n "${COLLAB_OVERRIDE_FILE:-}" ]; then
+  OVERRIDE_FILE="$COLLAB_OVERRIDE_FILE"
+else
+  OVERRIDE_FILE="$(collab_runtime_root)/collab-agents-override.$$.txt"
+  trap 'rm -f "$OVERRIDE_FILE"' EXIT
+fi
 rm -f "$OVERRIDE_FILE"
 API="${ENSEMBLE_URL:-http://localhost:23000}"
 HOST_ID="${ENSEMBLE_HOST_ID:-local}"
@@ -103,7 +117,6 @@ PY
     IFS=$'\x1f' read -r AGENTS PLAN_TEMPLATE PLAN_REASON <<< "$PLAN_RESULT"
     AGENTS_SOURCE="plan"
     if [ -z "$TEMPLATE" ]; then TEMPLATE="$PLAN_TEMPLATE"; fi
-    echo "Plan: agents=$AGENTS, template=${TEMPLATE:-none}${PLAN_REASON:+ ($PLAN_REASON)}"
   fi
 fi
 
@@ -138,7 +151,7 @@ fi
 # Pass the requested agents so preflight only checks the CLIs this run needs.
 PREFLIGHT_INPUT_AGENTS="$AGENTS"
 if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
-  if COLLAB_AGENTS_SOURCE="$AGENTS_SOURCE" "$SCRIPT_DIR/collab-preflight.sh" "$AGENTS" 2>&1 | sed 's/^/  /'; then
+  if COLLAB_OVERRIDE_FILE="$OVERRIDE_FILE" COLLAB_AGENTS_SOURCE="$AGENTS_SOURCE" "$SCRIPT_DIR/collab-preflight.sh" "$AGENTS" 2>&1 | sed 's/^/  /'; then
     :
   else
     PREFLIGHT_EXIT=${PIPESTATUS[0]}
@@ -183,6 +196,11 @@ PY
     fi
   fi
 fi
+
+# De skill leest deze regel uit de uitvoer in plaats van het plan zelf vooraf op
+# te vragen: ze staat er bij elke bron van de ploeg (argument, COLLAB_AGENTS,
+# plan, standaard) en toont de ploeg zoals die na preflight echt wordt gestart.
+echo "Plan: agents=${AGENTS:-codex,claude code}, template=${TEMPLATE:-none}${PLAN_REASON:+ ($PLAN_REASON)}"
 
 # ─── 2. Create team (use env vars to avoid quoting hell) ───
 TEAM_NAME="collab-$(python3 -c 'import random,time; print(str(time.time_ns()//1000000)+"-"+str(random.randint(1000,9999)))')"
@@ -266,7 +284,12 @@ RUNTIME_DIR="$(collab_runtime_dir "$TEAM_ID")"
 # laatste TEAM_ID=-regel uit onze stdout. Bij een vroege exit moet die regel er
 # dus ook staan: zonder team-id kan niemand het herstelpad volgen dat we in de
 # foutmelding aanraden.
+# MONITOR_MODE staat er vlak voor, ook op de foutpaden: "none" zolang er nog
+# geen monitor is geopend, daarna de modus die echt is gekozen (ook een
+# terugval naar "session").
+MONITOR_MODE="none"
 print_team_id_trailer() {
+  echo "MONITOR_MODE=$MONITOR_MODE"
   echo "TEAM_ID=$TEAM_ID"
 }
 
@@ -347,16 +370,11 @@ fi
 # layout the user is watching: it succeeds, reports success, and is never seen.
 # HERDR_ENV=1 and ORCA_AGENT_PANE identify terminal panes. An Orca bot chat
 # has neither, so its physical working directory below ~/.orca/bots identifies it.
-MONITOR_ENV_PREFIX=""
-for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
-  VALUE="${!KEY:-}"
-  if [ -n "$VALUE" ]; then
-    MONITOR_ENV_PREFIX+="$KEY=$(printf '%q' "$VALUE") "
-  fi
-done
-MONITOR_CMD="cd '$REPO_DIR' && ${MONITOR_ENV_PREFIX}node --import tsx cli/monitor.ts $TEAM_ID"
 MONITOR_PREF="${COLLAB_MONITOR:-auto}"
-SELECTED_MONITOR=$("$SCRIPT_DIR/collab-monitor-mode.sh" "$CWD")
+# Detecteer op de map waarvan de aanroeper startte, niet op de werkmap van het
+# team: een team dat vanuit een Orca-botchat in een andere repo werkt kreeg
+# daardoor de losse tmux-sessie in plaats van de browserfeed.
+SELECTED_MONITOR=$("$SCRIPT_DIR/collab-monitor-mode.sh" "$START_DIR")
 use_herdr=false; use_orca=false; use_iterm=false; use_webfeed=false
 case "$SELECTED_MONITOR" in
   herdr) use_herdr=true ;;
@@ -364,6 +382,16 @@ case "$SELECTED_MONITOR" in
   orca-webfeed) use_webfeed=true ;;
   iterm) use_iterm=true ;;
 esac
+MONITOR_CMD="$(collab_monitor_command "$REPO_DIR" "$TEAM_ID")"
+
+# Eén terugvalsessie voor alle paden hieronder, met hetzelfde monitorcommando.
+open_monitor_session() {
+  MONITOR_SESSION="ensemble-$TEAM_ID"
+  tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" "$MONITOR_CMD"
+  echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
+  MONITOR_MODE="session"
+}
 
 if [ "$MONITOR_PREF" = "none" ]; then
   echo -e "  ${CHECK} Monitor skipped ${D}(COLLAB_MONITOR=none)${R}"
@@ -385,12 +413,7 @@ elif [ "$use_herdr" = true ]; then
   else
     echo -e "  ${D}herdr launch failed: $(head -1 /tmp/ensemble-herdr.err 2>/dev/null)${R}"
     echo -e "  ${D}Falling back to tmux session...${R}"
-    MONITOR_SESSION="ensemble-$TEAM_ID"
-    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
-      "node --import tsx cli/monitor.ts $TEAM_ID"
-    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
-    MONITOR_MODE="session"
+    open_monitor_session
   fi
 elif [ "$use_orca" = true ]; then
   ORCA_MODE="${COLLAB_ORCA_MODE:-split}"
@@ -406,12 +429,7 @@ elif [ "$use_orca" = true ]; then
   else
     echo -e "  ${D}Orca launch failed: $(head -1 /tmp/ensemble-orca.err 2>/dev/null)${R}"
     echo -e "  ${D}Falling back to tmux session...${R}"
-    MONITOR_SESSION="ensemble-$TEAM_ID"
-    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
-      "node --import tsx cli/monitor.ts $TEAM_ID"
-    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
-    MONITOR_MODE="session"
+    open_monitor_session
   fi
 elif [ "$use_webfeed" = true ]; then
   if WEBFEED_RESULT=$("$SCRIPT_DIR/open-orca-webfeed.sh" "$TEAM_ID" 2>"$RUNTIME_DIR/webfeed-open.err"); then
@@ -420,12 +438,7 @@ elif [ "$use_webfeed" = true ]; then
   else
     echo "Orca webfeed failed: $(head -1 "$RUNTIME_DIR/webfeed-open.err")" >> "$RUNTIME_DIR/webfeed.log"
     echo -e "  ${D}Orca webfeed failed; falling back to tmux session${R}"
-    MONITOR_SESSION="ensemble-$TEAM_ID"
-    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
-      "node --import tsx cli/monitor.ts $TEAM_ID"
-    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
-    MONITOR_MODE="session"
+    open_monitor_session
   fi
 elif [ "$SELECTED_MONITOR" = split ]; then
   tmux split-window -h -l '40%' "$MONITOR_CMD"
@@ -446,20 +459,10 @@ elif [ "$use_iterm" = true ]; then
   else
     echo -e "  ${D}iTerm launch failed: $(head -1 /tmp/ensemble-iterm.err 2>/dev/null)${R}"
     echo -e "  ${D}Falling back to tmux session...${R}"
-    MONITOR_SESSION="ensemble-$TEAM_ID"
-    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
-      "node --import tsx cli/monitor.ts $TEAM_ID"
-    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
-    MONITOR_MODE="session"
+    open_monitor_session
   fi
 else
-  MONITOR_SESSION="ensemble-$TEAM_ID"
-  tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
-  tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
-    "./node_modules/.bin/tsx cli/monitor.ts $TEAM_ID"
-  echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
-  MONITOR_MODE="session"
+  open_monitor_session
 fi
 
 # ─── 5. Background poller (writes its own PID file, stops when the team is over) ───
@@ -719,4 +722,4 @@ echo -e "  ${D}│${R}  ${W}q${R}     ${D}quit monitor${R}                   ${D
 echo -e "  ${D}└───────────────────────────────────────┘${R}"
 echo ""
 # Machine-readable trailer, safe to grep even when multiple collabs run in parallel.
-echo "TEAM_ID=$TEAM_ID"
+print_team_id_trailer

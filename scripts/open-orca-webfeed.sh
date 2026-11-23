@@ -34,7 +34,8 @@ if [ ! -s "$RD/webfeed.port" ]; then
   exit 5
 fi
 PORT="$(cat "$RD/webfeed.port")"
-if ! RESPONSE=$("$ORCA_CLI" tab create --url "http://127.0.0.1:$PORT/" --split right --json); then
+# Begrensd: een hangende Orca-CLI hield de launcher onbegrensd vast.
+if ! RESPONSE=$(collab_run_bounded "${COLLAB_ORCA_TIMEOUT:-10}" "$ORCA_CLI" tab create --url "http://127.0.0.1:$PORT/" --split right --json); then
   kill "$JOB" 2>/dev/null || true
   echo "open-orca-webfeed: Orca tab creation failed" >&2
   exit 5

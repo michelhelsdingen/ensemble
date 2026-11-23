@@ -25,6 +25,7 @@
   const agents = new Map();
   let shown = 0;
   let finished = false;
+  let failures = 0;
   function colorFor(name) {
     if (!agents.has(name)) agents.set(name, palette[agents.size % palette.length]);
     return agents.get(name);
@@ -45,7 +46,7 @@
           summary.id = 'summary';
           summary.textContent = 'Team afgerond\n\n' + (message.summary || 'Geen samenvatting beschikbaar.');
           feed.append(summary);
-          status.textContent = 'Team afgerond';
+          status.textContent = 'Team afgerond, feed gestopt';
           finished = true;
           break;
         }
@@ -64,8 +65,22 @@
       }
       count.textContent = feed.querySelectorAll('article').length + ' berichten';
       if (!finished) status.textContent = 'Live';
+      failures = 0;
       window.scrollTo(0, document.body.scrollHeight);
-    } catch (error) { status.textContent = 'Verbinding verbroken'; }
+    } catch (error) {
+      failures++;
+      // Het rapport blijft staan: er wordt hier niets gewist. De feed stopt zelf
+      // kort na het einde van het team; een paneel dat dat net miste (bijvoorbeeld
+      // een verborgen tabblad dat zelden ververst) toont dan de laatste stand in
+      // plaats van een foutmelding. Zonder ooit een bericht gezien te hebben
+      // blijft het een echte verbindingsfout.
+      if (shown > 0 && failures >= 3) {
+        status.textContent = 'Feed gestopt, laatste stand blijft staan';
+        finished = true;
+      } else {
+        status.textContent = 'Verbinding verbroken';
+      }
+    }
     if (!finished) setTimeout(refresh, 1000);
   }
   refresh();
