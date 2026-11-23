@@ -37,6 +37,10 @@
       if (!response.ok) throw new Error('Feed niet bereikbaar');
       const lines = (await response.text()).split('\n').filter(Boolean);
       if (lines.length < shown) { feed.replaceChildren(); shown = 0; }
+      // Alleen meescrollen als de lezer al onderaan stond en er iets bijkwam:
+      // wie een ouder bericht terugleest wordt anders elke seconde weggetrokken.
+      const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+      const before = shown;
       for (const line of lines.slice(shown)) {
         let message;
         try { message = JSON.parse(line); } catch { break; }
@@ -66,7 +70,7 @@
       count.textContent = feed.querySelectorAll('article').length + ' berichten';
       if (!finished) status.textContent = 'Live';
       failures = 0;
-      window.scrollTo(0, document.body.scrollHeight);
+      if (atBottom && shown > before) window.scrollTo(0, document.body.scrollHeight);
     } catch (error) {
       failures++;
       // Het rapport blijft staan: er wordt hier niets gewist. De feed stopt zelf
