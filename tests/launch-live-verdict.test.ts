@@ -18,7 +18,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 const root = fs.mkdtempSync(path.resolve('tmp/launch-verdict-'))
 const scripts = path.join(root, 'scripts')
 fs.mkdirSync(scripts)
-for (const name of ['collab-launch.sh', 'collab-paths.sh']) {
+for (const name of ['collab-launch.sh', 'collab-paths.sh', 'collab-monitor-mode.sh']) {
   fs.copyFileSync(path.resolve('scripts', name), path.join(scripts, name))
 }
 const stub = (name: string, body: string) =>

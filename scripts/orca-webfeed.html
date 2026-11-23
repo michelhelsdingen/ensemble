@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="nl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collab livefeed</title>
+<style>
+  :root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #111827; color: #e5e7eb; }
+  body { margin: 0; }
+  header { position: sticky; top: 0; background: #1f2937; padding: 14px 18px; display: flex; justify-content: space-between; border-bottom: 1px solid #374151; }
+  h1 { font-size: 15px; margin: 0; }
+  #feed { padding: 16px 18px 70px; }
+  article { border-left: 3px solid var(--agent-color); padding: 7px 12px; margin-bottom: 12px; background: #1b2534; border-radius: 0 6px 6px 0; }
+  .meta { color: var(--agent-color); font-size: 12px; margin-bottom: 5px; }
+  .content, #summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #status { position: fixed; bottom: 0; width: 100%; box-sizing: border-box; padding: 10px 18px; background: #1f2937; color: #9ca3af; border-top: 1px solid #374151; }
+  #summary { padding: 12px; margin: 16px 0 60px; border: 1px solid #22c55e; border-radius: 6px; }
+</style>
+<header><h1>◈ Collab livefeed</h1><span id="count">0 berichten</span></header>
+<main id="feed"></main><footer id="status">Wachten op berichten...</footer>
+<script>
+  const feed = document.getElementById('feed');
+  const count = document.getElementById('count');
+  const status = document.getElementById('status');
+  const palette = ['#22d3ee', '#fbbf24', '#a78bfa', '#4ade80', '#fb7185', '#60a5fa'];
+  const agents = new Map();
+  let shown = 0;
+  let finished = false;
+  function colorFor(name) {
+    if (!agents.has(name)) agents.set(name, palette[agents.size % palette.length]);
+    return agents.get(name);
+  }
+  async function refresh() {
+    if (finished) return;
+    try {
+      const response = await fetch('/messages.jsonl', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Feed niet bereikbaar');
+      const lines = (await response.text()).split('\n').filter(Boolean);
+      if (lines.length < shown) { feed.replaceChildren(); shown = 0; }
+      for (const line of lines.slice(shown)) {
+        let message;
+        try { message = JSON.parse(line); } catch { break; }
+        shown++;
+        if (message.type === 'webfeed-finished') {
+          const summary = document.createElement('section');
+          summary.id = 'summary';
+          summary.textContent = 'Team afgerond\n\n' + (message.summary || 'Geen samenvatting beschikbaar.');
+          feed.append(summary);
+          status.textContent = 'Team afgerond';
+          finished = true;
+          break;
+        }
+        const article = document.createElement('article');
+        const sender = String(message.from || 'onbekend');
+        article.style.setProperty('--agent-color', colorFor(sender));
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const when = message.timestamp ? new Date(message.timestamp).toLocaleTimeString('nl-NL') : '';
+        meta.textContent = sender + (message.to ? ' → ' + message.to : '') + (when ? ' · ' + when : '');
+        const content = document.createElement('div');
+        content.className = 'content';
+        content.textContent = String(message.content || '');
+        article.append(meta, content);
+        feed.append(article);
+      }
+      count.textContent = feed.querySelectorAll('article').length + ' berichten';
+      if (!finished) status.textContent = 'Live';
+      window.scrollTo(0, document.body.scrollHeight);
+    } catch (error) { status.textContent = 'Verbinding verbroken'; }
+    if (!finished) setTimeout(refresh, 1000);
+  }
+  refresh();
+</script>
+</html>

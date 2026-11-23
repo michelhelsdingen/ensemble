@@ -8,8 +8,9 @@
 #               Also settable via COLLAB_TEMPLATE. Empty = generic lead/worker roles.
 #
 # Monitor selection (env vars):
-#   COLLAB_MONITOR=auto     (default) herdr, Orca or iTerm pane, else tmux
+#   COLLAB_MONITOR=auto     (default) herdr, Orca pane or bot webfeed, iTerm, else tmux
 #   COLLAB_MONITOR=orca     open in the current Orca pane
+#   COLLAB_MONITOR=orca-webfeed open a browser feed beside an Orca bot chat
 #   COLLAB_MONITOR=iterm    force iTerm split
 #   COLLAB_MONITOR=tmux     force a detached tmux session (old behavior)
 #   COLLAB_MONITOR=none     no monitor at all
@@ -333,7 +334,7 @@ else
 fi
 
 # ─── 4. Monitor ───
-# Monitor selection order (override via COLLAB_MONITOR=herdr|orca|tmux|iterm|none):
+# Monitor selection order (override via COLLAB_MONITOR=herdr|orca|orca-webfeed|tmux|iterm|none):
 #   1. herdr pane: if running inside a herdr workspace
 #   2. Orca pane: if running inside Orca and its CLI is available
 #   3. tmux split: if already inside a tmux session
@@ -344,7 +345,8 @@ fi
 # draws its panes inside a host iTerm session but passes TERM_PROGRAM through
 # unchanged, so trusting TERM_PROGRAM there opens a real iTerm split outside the
 # layout the user is watching: it succeeds, reports success, and is never seen.
-# HERDR_ENV=1 and ORCA_AGENT_PANE are the reliable signals.
+# HERDR_ENV=1 and ORCA_AGENT_PANE identify terminal panes. An Orca bot chat
+# has neither, so its physical working directory below ~/.orca/bots identifies it.
 MONITOR_ENV_PREFIX=""
 for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_CORS_ORIGIN ENSEMBLE_AGENTS_CONFIG ENSEMBLE_AGENTS_EXTRA ENSEMBLE_AGENT_FLAGS ENSEMBLE_HOST_ID; do
   VALUE="${!KEY:-}"
@@ -354,30 +356,14 @@ for KEY in ENSEMBLE_URL ENSEMBLE_DATA_DIR ENSEMBLE_PORT ENSEMBLE_HOST ENSEMBLE_C
 done
 MONITOR_CMD="cd '$REPO_DIR' && ${MONITOR_ENV_PREFIX}node --import tsx cli/monitor.ts $TEAM_ID"
 MONITOR_PREF="${COLLAB_MONITOR:-auto}"
-
-use_herdr=false
-if [ "$MONITOR_PREF" = "herdr" ]; then
-  use_herdr=true
-elif [ "$MONITOR_PREF" = "auto" ] && [ "${HERDR_ENV:-}" = "1" ] && command -v herdr > /dev/null 2>&1; then
-  use_herdr=true
-fi
-
-use_orca=false
-if [ "$MONITOR_PREF" = "orca" ]; then
-  use_orca=true
-elif [ "$MONITOR_PREF" = "auto" ] && [ "$use_herdr" = false ] \
-     && [ -n "${ORCA_AGENT_PANE:-}" ] \
-     && { command -v orca >/dev/null 2>&1 || [ -x /Applications/Orca.app/Contents/Resources/bin/orca ]; }; then
-  use_orca=true
-fi
-
-use_iterm=false
-if [ "$MONITOR_PREF" = "iterm" ]; then
-  use_iterm=true
-elif [ "$MONITOR_PREF" = "auto" ] && [ "$use_herdr" = false ] && [ "$use_orca" = false ] && [ -z "${TMUX:-}" ] \
-     && [ "$(uname)" = "Darwin" ] && [ "${TERM_PROGRAM:-}" = "iTerm.app" ]; then
-  use_iterm=true
-fi
+SELECTED_MONITOR=$("$SCRIPT_DIR/collab-monitor-mode.sh" "$CWD")
+use_herdr=false; use_orca=false; use_iterm=false; use_webfeed=false
+case "$SELECTED_MONITOR" in
+  herdr) use_herdr=true ;;
+  orca) use_orca=true ;;
+  orca-webfeed) use_webfeed=true ;;
+  iterm) use_iterm=true ;;
+esac
 
 if [ "$MONITOR_PREF" = "none" ]; then
   echo -e "  ${CHECK} Monitor skipped ${D}(COLLAB_MONITOR=none)${R}"
@@ -427,7 +413,21 @@ elif [ "$use_orca" = true ]; then
     echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
     MONITOR_MODE="session"
   fi
-elif [ -n "${TMUX:-}" ] && [ "$MONITOR_PREF" != "iterm" ]; then
+elif [ "$use_webfeed" = true ]; then
+  if WEBFEED_RESULT=$("$SCRIPT_DIR/open-orca-webfeed.sh" "$TEAM_ID" 2>"$RUNTIME_DIR/webfeed-open.err"); then
+    echo -e "  ${CHECK} Monitor opened ${D}(Orca browser feed)${R}"
+    MONITOR_MODE="orca-webfeed"
+  else
+    echo "Orca webfeed failed: $(head -1 "$RUNTIME_DIR/webfeed-open.err")" >> "$RUNTIME_DIR/webfeed.log"
+    echo -e "  ${D}Orca webfeed failed; falling back to tmux session${R}"
+    MONITOR_SESSION="ensemble-$TEAM_ID"
+    tmux kill-session -t "$MONITOR_SESSION" 2>/dev/null || true
+    tmux new-session -d -s "$MONITOR_SESSION" -c "$REPO_DIR" \
+      "node --import tsx cli/monitor.ts $TEAM_ID"
+    echo -e "  ${CHECK} Monitor ready ${D}(tmux attach -t $MONITOR_SESSION)${R}"
+    MONITOR_MODE="session"
+  fi
+elif [ "$SELECTED_MONITOR" = split ]; then
   tmux split-window -h -l '40%' "$MONITOR_CMD"
   echo -e "  ${CHECK} Monitor opened ${D}(right panel)${R}"
   MONITOR_MODE="split"

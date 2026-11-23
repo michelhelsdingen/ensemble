@@ -17,6 +17,7 @@
 # read, nothing is removed and the exit code is 2: without it there is no way
 # to tell a live team from a dead one.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 API="${ENSEMBLE_URL:-http://localhost:23000}"
 MODE="dry-run"
@@ -55,14 +56,28 @@ echo -e "  ${BD}${W}◈ collab orphans${R}"
 echo -e "  ${D}mode: ${MODE} | spares sessions younger than ${MIN_AGE_MINUTES}m${R}"
 echo ""
 
-if ! command -v tmux > /dev/null 2>&1; then
-  echo -e "  ${YEL}tmux niet gevonden, niets te doen${R}"
-  exit 0
+SESSIONS=""
+HAS_TMUX=false
+if command -v tmux > /dev/null 2>&1; then
+  HAS_TMUX=true
+  SESSIONS=$(tmux list-sessions -F $'#{session_name}\t#{session_created}' 2>/dev/null || true)
 fi
-
-SESSIONS=$(tmux list-sessions -F '#{session_name}	#{session_created}' 2>/dev/null || true)
-if [ -z "$SESSIONS" ]; then
-  echo -e "  ${GRN}Geen tmux-sessies${R}"
+ROOT="${COLLAB_RUNTIME_ROOT:-/tmp/ensemble}"
+HAS_WEBFEED=false
+if [ -d "$ROOT" ]; then
+  for RD in "$ROOT"/*; do
+    if [ -f "$RD/webfeed-page-id" ] || [ -f "$RD/webfeed.pid" ]; then
+      HAS_WEBFEED=true
+      break
+    fi
+  done
+fi
+if [ -z "$SESSIONS" ] && [ "$HAS_WEBFEED" = false ]; then
+  if [ "$HAS_TMUX" = false ]; then
+    echo -e "  ${YEL}tmux niet gevonden, niets te doen${R}"
+  else
+    echo -e "  ${GRN}Geen tmux-sessies${R}"
+  fi
   exit 0
 fi
 
@@ -101,6 +116,28 @@ MIN_AGE_SECONDS=$((MIN_AGE_MINUTES * 60))
 ORPHANS=0
 KILLED=0
 SPARED=0
+
+# Finished browser feeds are eligible after the same age threshold.
+if [ -d "$ROOT" ]; then
+  for RD in "$ROOT"/*; do
+    [ -d "$RD" ] && [ -f "$RD/.finished" ] || continue
+    [ -f "$RD/webfeed-page-id" ] || [ -f "$RD/webfeed.pid" ] || continue
+    ID="$(basename "$RD")"
+    case " $LIVE_IDS " in *" $ID "*) continue ;; esac
+    if stat -f '%m' "$RD/.finished" >/dev/null 2>&1; then
+      FINISHED_TS="$(stat -f '%m' "$RD/.finished")"
+    else
+      FINISHED_TS="$(stat -c '%Y' "$RD/.finished")"
+    fi
+    [ "$((NOW - FINISHED_TS))" -ge "$MIN_AGE_SECONDS" ] || continue
+    if [ "$MODE" = force ]; then
+      "$SCRIPT_DIR/collab-webfeed-stop.sh" "$RD"
+      echo "  webfeed gestopt: $ID"
+    else
+      echo "  webfeed wees: $ID (zou gestopt worden)"
+    fi
+  done
+fi
 
 hoort_bij_levend_team() {
   local sessie="$1" naam id

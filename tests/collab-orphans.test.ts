@@ -38,6 +38,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(bin, 'tmux'), [
     '#!/bin/bash',
     'if [ "$1" = list-sessions ]; then',
+    '  [[ "$3" == *$\'\t\'* ]] || exit 9',
     ...SESSIES.map(([naam, start]) => `  printf '%s\\t%s\\n' '${naam}' '${start}'`),
     '  exit 0',
     'fi',

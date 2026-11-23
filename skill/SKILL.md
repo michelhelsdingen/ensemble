@@ -39,6 +39,7 @@ ES="__ENSEMBLE_DIR__/scripts"
 | `collab-orphans.sh` | Stop tmux sessions of teams that are over (dry-run by default) |
 | `collab-smoke.sh` | Start a real team, exchange a message, break it down; `--runs N` |
 | `open-herdr-monitor.sh` | Open the monitor in a herdr pane, called by launch |
+| `open-orca-webfeed.sh` | Open the browser feed beside an Orca bot chat |
 | `collab-preflight.sh` | Auth/DNS/service checks, auto-run by launch |
 | `collab-postcheck.sh` | Agent health check ~30s after spawn, auto-armed by launch |
 
@@ -59,22 +60,23 @@ All collab artifacts live in `/tmp/ensemble/<TEAM_ID>/`:
 
 ### Step 0: Detect environment
 ```bash
-if [ "${HERDR_ENV:-}" = "1" ]; then
-  echo "HERDR"
-elif [ -n "$TMUX" ]; then
-  echo "TMUX_YES"
-elif [ "$(uname)" = "Darwin" ] && [ "${TERM_PROGRAM:-}" = "iTerm.app" ]; then
-  echo "ITERM_NATIVE"
-else
-  echo "TMUX_NO"
-fi
+case "$("$ES/collab-monitor-mode.sh" "$(pwd)")" in
+  herdr) echo "HERDR" ;;
+  orca) echo "ORCA_PANE" ;;
+  orca-webfeed) echo "ORCA_WEBFEED" ;;
+  split) echo "TMUX_YES" ;;
+  iterm) echo "ITERM_NATIVE" ;;
+  *) echo "TMUX_NO" ;;
+esac
 ```
 
-Four monitor modes:
-- `HERDR` — inside a herdr workspace; `collab-launch.sh` asks herdr for the split
-- `TMUX_YES` — already inside tmux; `collab-launch.sh` opens a split pane right
-- `ITERM_NATIVE` — macOS iTerm2 without tmux; `collab-launch.sh` uses `osascript` to open a native iTerm split pane (no `tmux attach` needed)
-- `TMUX_NO` — fallback: detached tmux session the user must attach to
+Six monitor modes:
+- `HERDR`: inside a herdr workspace; `collab-launch.sh` asks herdr for the split
+- `ORCA_PANE`: inside an Orca terminal pane; `collab-launch.sh` opens a terminal split
+- `ORCA_WEBFEED`: inside an Orca bot chat without a terminal pane; a local browser feed opens on the right
+- `TMUX_YES`: already inside tmux; `collab-launch.sh` opens a split pane right
+- `ITERM_NATIVE`: macOS iTerm2 without tmux; `collab-launch.sh` uses `osascript` to open a native iTerm split pane (no `tmux attach` needed)
+- `TMUX_NO`: fallback: detached tmux session the user must attach to
 
 **Check `HERDR_ENV` first, and never conclude "iTerm" from `TERM_PROGRAM` alone.**
 herdr owns the terminal and draws its own panes inside a host session, but passes
@@ -83,7 +85,7 @@ pane outside the layout the user is watching: it succeeds, reports success, and 
 seen. `HERDR_ENV=1` is the reliable signal (`HERDR_PANE_ID`, `HERDR_TAB_ID` and
 `HERDR_WORKSPACE_ID` name the exact pane).
 
-Force a specific mode with `COLLAB_MONITOR=herdr|tmux|iterm|none`, change the herdr layout
+Force a specific mode with `COLLAB_MONITOR=herdr|orca|orca-webfeed|tmux|iterm|none`, change the herdr layout
 with `COLLAB_HERDR_MODE=split|tab`, or the iTerm layout with
 `COLLAB_ITERM_MODE=split|tab|window` (both default `split`).
 
@@ -182,6 +184,8 @@ the team without that agent if the task allows it.
 ### Step 2: Tell the user where the monitor is
 
 - `HERDR`: "Team is live in the new herdr pane on the right."
+- `ORCA_PANE`: "Team is live in the new Orca terminal pane on the right."
+- `ORCA_WEBFEED`: "Team is live in the Orca browser feed on the right."
 - `TMUX_YES`: "Team is live in the right tmux pane."
 - `ITERM_NATIVE`: "Team is live in the new iTerm pane on the right."
 - `TMUX_NO`: "`tmux attach -t ensemble-$TEAM_ID` — live TUI monitor (steer, disband, scroll)"
@@ -230,6 +234,12 @@ TEAM_ID="<id>" && RD="/tmp/ensemble/$TEAM_ID" && kill "$(cat "$RD/poller.pid" 2>
 Same as `TMUX_YES`: the monitor pane is visible to the user, so don't inline-poll. Wait for
 completion in the background and present the final summary. The monitor closes its own herdr
 pane on exit (pane id in `/tmp/ensemble/<TEAM_ID>/herdr-pane-id`), so no `tmux kill-session`.
+
+#### If `ORCA_PANE` or `ORCA_WEBFEED`: background summary watcher
+
+The monitor is visible in Orca. Wait for completion in the background and present the final
+summary. The browser feed shows the last messages and summary before its local server stops.
+The browser pane remains until cleanup or the user closes it.
 
 #### If `ITERM_NATIVE`: background summary watcher
 

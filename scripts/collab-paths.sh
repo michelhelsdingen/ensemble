@@ -156,6 +156,7 @@ stop_team_processes() {
     kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
     rm -f "$rd/$naam.pid"
   done
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/collab-webfeed-stop.sh" "$rd"
 }
 
 # Beoordeel hoe ver de prompts van een team zijn, uit het team-JSON op stdin.

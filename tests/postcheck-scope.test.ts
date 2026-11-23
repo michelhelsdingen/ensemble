@@ -63,7 +63,7 @@ exit 0
     `#!/bin/bash
 echo "$@" >> "${path.join(bin, 'curl-aanroepen.log')}"
 if [ -z "\${TEST_TEAM_JSON:-}" ]; then exit 7; fi
-printf '%s' "\$TEST_TEAM_JSON"
+printf '%s' "$TEST_TEAM_JSON"
 `,
     { mode: 0o755 },
   )

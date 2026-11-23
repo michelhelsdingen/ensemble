@@ -10,7 +10,7 @@ Ensemble orchestrates AI agents into collaborative teams. Out of the box it pair
 
 - **Team orchestration**: spawn multi-agent teams with a single command
 - **Real-time messaging**: agents communicate via a structured message bus
-- **TUI monitor**: live viewer that opens in a herdr pane, a native iTerm2 split pane on macOS, or tmux elsewhere
+- **Live monitor**: a TUI in herdr, Orca terminal, iTerm2 or tmux, and a browser feed beside an Orca bot chat
 - **Auto-disband**: completion detection ends teams when every agent has signalled done
 - **Multi-host support**: run agents across local and remote machines
 - **CLI & HTTP API**: full control via command line or REST endpoints
@@ -182,6 +182,8 @@ curl -X POST http://localhost:23000/api/ensemble/teams \
 | Situation | Monitor |
 |---|---|
 | Inside a [herdr](https://github.com/herdrdev/herdr) workspace | **herdr pane** (checked first) |
+| Inside an Orca terminal pane (`ORCA_AGENT_PANE`) | Orca terminal split |
+| Inside an Orca bot chat under `~/.orca/bots/`, without a terminal pane | **browser feed on the right** |
 | Already inside tmux | tmux split pane (right) |
 | macOS + iTerm2, no tmux | **native iTerm2 split pane** |
 | Linux, or no iTerm2 | detached tmux session (`tmux attach -t ensemble-<id>`) |
@@ -194,11 +196,12 @@ closes itself when the team disbands.
 
 Override with env vars:
 
-- `COLLAB_MONITOR=herdr\|tmux\|iterm\|none`: force a specific mode (or disable the monitor)
+- `COLLAB_MONITOR=herdr\|orca\|orca-webfeed\|tmux\|iterm\|none`: force a specific mode (or disable the monitor)
+- `ORCA_CLI_COMMAND`: use a specific Orca CLI executable for the browser feed
 - `COLLAB_ITERM_MODE=split\|tab\|window`: iTerm layout (default `split`)
 - `COLLAB_HERDR_MODE=split\|tab`: herdr layout (default `split`)
 
-On macOS, you never need `tmux attach` for the monitor.
+On macOS, `tmux attach` is only needed when a native monitor route fails and the launcher falls back to a detached session.
 
 ## Configuration
 
