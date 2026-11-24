@@ -9,6 +9,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import http from 'http'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -28,10 +29,35 @@ afterEach(() => {
 async function run(probeJson: string, agents = 'codex,claude'): Promise<{ code: number; output: string }> {
   const stub = path.join(root, 'startprobe')
   fs.writeFileSync(stub, `#!/bin/bash\ncat <<'JSON'\n${probeJson}\nJSON\n`, { mode: 0o755 })
+  const python = process.env.PATH!.split(path.delimiter)
+    .map(dir => path.join(dir, 'python3')).find(candidate => fs.existsSync(candidate))!
+  fs.writeFileSync(path.join(root, 'python3'), `#!/bin/bash\nif [ "$1" = "-" ]; then exit 0; fi\nexec '${python}' "$@"\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'tmux'), '#!/bin/bash\nexit 0\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'codex'), '#!/bin/bash\nexit 1\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(root, 'grok'), '#!/bin/bash\necho "Logged in"\n', { mode: 0o755 })
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/v1/health') {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ status: 'healthy', credentialStore: 'readable', uptimeSeconds: 0,
+        spawnReady: true, executable: 'present', repoRead: 'readable' }))
+    } else {
+      res.writeHead(404).end()
+    }
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('geen testpoort gekregen')
   try {
     const { stdout, stderr } = await execFileAsync(preflight, [agents], {
       env: {
         ...process.env,
+        HOME: root,
+        PATH: `${root}${path.delimiter}${process.env.PATH}`,
+        ENSEMBLE_URL: `http://127.0.0.1:${address.port}`,
+        ENSEMBLE_CONFIG: path.join(root, 'absent-config.json'),
+        ENSEMBLE_AGENTS_EXTRA: path.join(root, 'absent-agents.json'),
+        COLLAB_OVERRIDE_FILE: path.join(root, 'override'),
         COLLAB_STARTPROBE_CMD: stub,
       },
       encoding: 'utf8',
@@ -41,14 +67,15 @@ async function run(probeJson: string, agents = 'codex,claude'): Promise<{ code: 
   } catch (error) {
     const e = error as { code?: number; stdout?: string; stderr?: string }
     return { code: e.code ?? -1, output: (e.stdout ?? '') + (e.stderr ?? '') }
+  } finally {
+    server.close()
   }
 }
 
 describe('preflight startprobe', () => {
   // De probe loopt sinds 03-11-2026 op de achtergrond en wordt in sectie 5b
-  // beoordeeld, dus na de auth-checks. In deze testomgeving staat HOME in
-  // tmp/home (zie vitest.config.ts), waardoor codex daar niet kan inloggen en
-  // preflight met code 4 stopt vóór sectie 5b. Daarom toetsen we hier wat er
+  // beoordeeld, dus na de auth-checks. De codex-stub laat de auth-check bewust
+  // met code 4 falen vóór sectie 5b. Daarom toetsen we hier wat er
   // dan hoort te gebeuren: de dialoog verdwijnt niet achter die andere fout.
   it('meldt de dialoog, ook als een andere check eerder faalt', async () => {
     const { output } = await run(JSON.stringify({

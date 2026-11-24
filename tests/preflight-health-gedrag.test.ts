@@ -20,7 +20,9 @@ beforeEach(() => {
     const executable = execFileSync('/bin/bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim()
     fs.symlinkSync(executable, path.join(root, tool))
   }
-  stub('python3', `if [ "$1" = "-" ]; then exit 0; fi\nexec '${python}' "$@"`)
+  // Een verse checkout is nieuwer dan de fictieve service met 7200s uptime.
+  // Houd de aparte controle op verouderde servicecode buiten deze health-test.
+  stub('python3', `if [ "$1" = "-" ]; then exit 0; fi\nif [ "$1" = "-c" ] && [[ "$2" == *"wortel = sys.argv[1]"* ]]; then echo 0; exit 0; fi\nexec '${python}' "$@"`)
   stub('tmux', 'exit 0')
   stub('sleep', 'exit 0')
 })
