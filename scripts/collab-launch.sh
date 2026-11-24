@@ -57,8 +57,11 @@ TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
 if [ -n "${COLLAB_OVERRIDE_FILE:-}" ]; then
   OVERRIDE_FILE="$COLLAB_OVERRIDE_FILE"
 else
-  OVERRIDE_FILE="$(collab_runtime_root)/collab-agents-override.$$.txt"
-  trap 'rm -f "$OVERRIDE_FILE"' EXIT
+  # Eigen map met mode 700 via mktemp: een voorspelbare naam in een gedeelde
+  # tmp-map kan door een ander vooraf als symlink zijn neergezet.
+  OVERRIDE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/collab-override.XXXXXX")"
+  OVERRIDE_FILE="$OVERRIDE_DIR/agents.txt"
+  trap 'rm -rf "$OVERRIDE_DIR"' EXIT
 fi
 rm -f "$OVERRIDE_FILE"
 API="${ENSEMBLE_URL:-http://localhost:23000}"

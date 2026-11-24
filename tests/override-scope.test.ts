@@ -20,7 +20,10 @@ describe('override', () => {
     const literal = LAUNCH.match(/\/tmp\/collab-agents-override\.txt/g) || []
     expect(literal.length).toBe(0)
     expect(LAUNCH).not.toMatch(/\$\(collab_runtime_root\)\/collab-agents-override\.txt/)
-    expect(LAUNCH).toMatch(/OVERRIDE_FILE="\$\(collab_runtime_root\)\/collab-agents-override\.\$\$\.txt"/)
+    // In een eigen map uit mktemp -d (mode 700), niet onder een voorspelbare naam.
+    expect(LAUNCH).not.toMatch(/collab-agents-override\.\$\$\.txt/)
+    expect(LAUNCH).toMatch(/OVERRIDE_DIR="\$\(mktemp -d /)
+    expect(LAUNCH).toMatch(/OVERRIDE_FILE="\$OVERRIDE_DIR\/agents\.txt"/)
     expect(LAUNCH).toMatch(/COLLAB_OVERRIDE_FILE="\$OVERRIDE_FILE" COLLAB_AGENTS_SOURCE=/)
   })
 })

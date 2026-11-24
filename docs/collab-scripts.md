@@ -158,7 +158,7 @@ session like for any other Orca error. The browser feed server stops 20 s
 `COLLAB_WEBFEED_UNSERVED_SECONDS` (default 600) after `.finished` appeared if no page came back, and
 in any case after `COLLAB_WEBFEED_MAX_SECONDS` (default 21600, 6 hours). The browser pane itself is
 never closed automatically. Each launch keeps its own agent override file
-(`collab-agents-override.<pid>.txt` under the runtime root) and removes it on exit.
+(in a private `mktemp -d` directory) and removes it on exit.
 
 ---
 

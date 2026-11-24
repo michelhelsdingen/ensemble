@@ -165,8 +165,9 @@ describe('override per launch', () => {
     const seen = fs.readFileSync(path.join(root, 'seen-override'), 'utf8')
     expect(seen).not.toBe('')
     expect(seen).not.toBe(path.join(root, 'collab-agents-override.txt'))
-    expect(seen).toMatch(/collab-agents-override\.\d+\.txt$/)
+    expect(seen).toMatch(/collab-override\.[A-Za-z0-9]+\/agents\.txt$/)
     expect(fs.existsSync(seen)).toBe(false)
+    expect(fs.existsSync(path.dirname(seen))).toBe(false)
   }, 30_000)
 
   it('laat een door de aanroeper opgegeven overridebestand van de aanroeper', () => {
