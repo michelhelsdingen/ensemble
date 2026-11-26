@@ -57,7 +57,7 @@ describe('monitor mode', () => {
     fs.writeFileSync(path.join(bin, 'herdr'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     const run = (vars: Record<string, string>, cwd = bot) => {
       const result = spawnSync('bash', [mode, cwd], {
-        encoding: 'utf8', env: { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}`, COLLAB_MONITOR: 'auto', HERDR_ENV: '', ORCA_AGENT_PANE: '', TMUX: '', TERM_PROGRAM: '', ...vars },
+        encoding: 'utf8', env: { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}`, COLLAB_MONITOR: 'auto', HERDR_ENV: '', ORCA_AGENT_PANE: '', TMUX: '', TERM_PROGRAM: '', ORCA_STRUCTURED_SESSION: '', ...vars },
       })
       expect(result.status, result.stderr).toBe(0)
       return result.stdout.trim()
@@ -69,6 +69,7 @@ describe('monitor mode', () => {
     expect(run({ TERM_PROGRAM: 'iTerm.app' })).toBe(process.platform === 'darwin' ? 'iterm' : 'session')
     expect(run({ TERM_PROGRAM: 'iTerm.app' }, root)).toBe(process.platform === 'darwin' ? 'iterm' : 'session')
     expect(run({}, root)).toBe('session')
+    expect(run({ ORCA_STRUCTURED_SESSION: '1' }, root)).toBe('orca-webfeed')
   })
 })
 

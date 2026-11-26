@@ -28,7 +28,10 @@ else
   BOT_ROOT="${HOME:-}/.orca/bots"
   REAL_WORK_DIR="$(cd "$WORK_DIR" 2>/dev/null && pwd -P || true)"
   REAL_BOT_ROOT="$(cd "$BOT_ROOT" 2>/dev/null && pwd -P || true)"
-  if [ -n "$REAL_BOT_ROOT" ] && [[ "$REAL_WORK_DIR" == "$REAL_BOT_ROOT"/* ]] \
+  # Een gewone Orca-chat in een projectmap heeft geen botmap en geen paneel;
+  # ORCA_STRUCTURED_SESSION=1 is daar het enige kenmerk.
+  if { [ "${ORCA_STRUCTURED_SESSION:-}" = 1 ] \
+        || { [ -n "$REAL_BOT_ROOT" ] && [[ "$REAL_WORK_DIR" == "$REAL_BOT_ROOT"/* ]]; }; } \
       && [ -z "${ORCA_AGENT_PANE:-}" ] && [ -z "${HERDR_ENV:-}" ] \
       && [ -z "${TERM_PROGRAM:-}" ] && orca_available; then
     echo orca-webfeed

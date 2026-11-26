@@ -81,6 +81,7 @@ function launch(options: { from?: string; env?: Record<string, string>; args?: s
       COLLAB_RUNTIME_ROOT: root,
       COLLAB_TEAM_ID_FILE: path.join(root, 'team-id.txt'),
       COLLAB_MONITOR: 'auto', HERDR_ENV: '', ORCA_AGENT_PANE: '', TMUX: '', TERM_PROGRAM: '',
+      ORCA_STRUCTURED_SESSION: '',
       COLLAB_SKIP_POSTCHECK: '1', COLLAB_AGENT_WAIT_SECS: '8',
       ENSEMBLE_URL: 'http://launcher.test',
       TEST_ROOT: root,
@@ -93,6 +94,13 @@ function launch(options: { from?: string; env?: Record<string, string>; args?: s
 describe('MONITOR_MODE en de startmap', () => {
   it('kiest de browserfeed als een botchat in een andere repo werkt', () => {
     const run = launch({ from: botDir })
+    expect(run.status, run.out).toBe(0)
+    expect(run.out).toContain('MONITOR_MODE=orca-webfeed')
+    expect(fs.existsSync(TMUX_LOG), 'er mag geen tmux-sessie zijn geopend').toBe(false)
+  }, 30_000)
+
+  it('kiest de browserfeed in een gewone Orca-chat buiten de botmap', () => {
+    const run = launch({ from: otherRepo, env: { ORCA_STRUCTURED_SESSION: '1' } })
     expect(run.status, run.out).toBe(0)
     expect(run.out).toContain('MONITOR_MODE=orca-webfeed')
     expect(fs.existsSync(TMUX_LOG), 'er mag geen tmux-sessie zijn geopend').toBe(false)
